@@ -1,0 +1,7 @@
+[tool.pylint.main]
+ignore = [".venv", "build", "dist"]
+
+[tool.pylint.messages_control]
+disable = [
+  "missing-module-docstring",
+]
