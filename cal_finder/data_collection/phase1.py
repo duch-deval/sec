@@ -8,13 +8,16 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, urlunparse
+import logging
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    print("ERROR: BeautifulSoup required.")
+    logger.error("ERROR: BeautifulSoup required.")
     sys.exit(1)
 
 UA = os.getenv("SEC_USER_AGENT", "Bloomberg-Drexel-Capstone (dhd37@drexel.edu)")
@@ -24,27 +27,25 @@ RETRY_MAX = 5
 RETRY_BASE_DELAY = 0.5
 
 SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": UA,
-    "Accept": "application/json,text/html,*/*",
-    "Referer": "https://www.sec.gov/edgar/search/",
-})
+SESSION.headers.update(
+    {
+        "User-Agent": UA,
+        "Accept": "application/json,text/html,*/*",
+        "Referer": "https://www.sec.gov/edgar/search/",
+    }
+)
 
 EX4_TYPE_RE = re.compile(
-    r"^EX\s*[-_ ]?\s*4(?:[.\-]?\d+)?(?:[A-Za-z()\-/\s]*)?$", 
-    re.IGNORECASE
+    r"^EX\s*[-_ ]?\s*4(?:[.\-]?\d+)?(?:[A-Za-z()\-/\s]*)?$", re.IGNORECASE
 )
 EX99_TYPE_RE = re.compile(
-    r"^EX\s*[-_ ]?\s*99(?:[.\-]?\d+)?(?:[A-Za-z()\-/\s]*)?$", 
-    re.IGNORECASE
+    r"^EX\s*[-_ ]?\s*99(?:[.\-]?\d+)?(?:[A-Za-z()\-/\s]*)?$", re.IGNORECASE
 )
 EX4_NAME_RE = re.compile(
-    r"(?:^|/)[^/]*ex[-_. ]?4(?:[.-]?\d+)?\.(?:htm|html|pdf|txt)$", 
-    re.IGNORECASE
+    r"(?:^|/)[^/]*ex[-_. ]?4(?:[.-]?\d+)?\.(?:htm|html|pdf|txt)$", re.IGNORECASE
 )
 EX99_NAME_RE = re.compile(
-    r"(?:^|/)[^/]*ex[-_. ]?99(?:[.-]?\d+)?\.(?:htm|html|pdf|txt)$", 
-    re.IGNORECASE
+    r"(?:^|/)[^/]*ex[-_. ]?99(?:[.-]?\d+)?\.(?:htm|html|pdf|txt)$", re.IGNORECASE
 )
 INDENTURE_HINT_RE = re.compile(
     r"(?i)\b("
@@ -77,51 +78,52 @@ NEG_NOISE_RE = re.compile(
     r")\b"
 )
 
+
 def _get_json_with_retry(params: Dict[str, str]) -> Dict[str, Any]:
     delay = RETRY_BASE_DELAY
     last_err = None
-    
+
     for attempt in range(1, RETRY_MAX + 1):
         try:
             r = SESSION.get(FTS_BASE, params=params, timeout=30)
-            
+
             if r.status_code == 200:
                 ct = r.headers.get("Content-Type", "")
                 if "application/json" in ct:
                     return r.json()
-            
+
             if r.status_code in (429, 500, 502, 503, 504):
                 last_err = f"HTTP {r.status_code}"
                 jitter = random.uniform(0, delay * 0.3)
                 time.sleep(delay + jitter)
                 delay = min(delay * 2, 16.0)
                 continue
-            
+
             r.raise_for_status()
             return r.json()
-            
+
         except requests.exceptions.Timeout:
             last_err = "Timeout"
             jitter = random.uniform(0, delay * 0.3)
             time.sleep(delay + jitter)
             delay = min(delay * 2, 16.0)
-            
+
         except Exception as e:
             last_err = str(e)
             time.sleep(delay)
             delay = min(delay * 2, 16.0)
-    
+
     raise RuntimeError(f"FTS API failed after {RETRY_MAX} retries: {last_err}")
 
 
 def _get_with_retry(url: str, accept_json: bool = False) -> requests.Response:
     delay = RETRY_BASE_DELAY
     last_err = None
-    
+
     for attempt in range(1, RETRY_MAX + 1):
         try:
             r = SESSION.get(url, timeout=45)
-            
+
             if r.status_code == 200:
                 if accept_json:
                     ct = r.headers.get("Content-Type", "")
@@ -129,33 +131,33 @@ def _get_with_retry(url: str, accept_json: bool = False) -> requests.Response:
                         return r
                 else:
                     return r
-            
+
             if r.status_code in (429, 500, 502, 503, 504):
                 last_err = f"HTTP {r.status_code}"
                 time.sleep(delay)
                 delay = min(delay * 2, 8.0)
                 continue
-            
+
             r.raise_for_status()
             return r
-            
+
         except Exception as e:
             last_err = str(e)
             if attempt < RETRY_MAX:
                 time.sleep(delay)
                 delay = min(delay * 2, 8.0)
-    
+
     raise RuntimeError(f"Fetch failed after {RETRY_MAX} attempts: {url} ({last_err})")
 
 
 def _normalize_url(url: str) -> str:
     p = urlparse(url)
     p2 = p._replace(
-        params="", 
-        query="", 
-        fragment="", 
-        scheme=p.scheme.lower(), 
-        netloc=p.netloc.lower()
+        params="",
+        query="",
+        fragment="",
+        scheme=p.scheme.lower(),
+        netloc=p.netloc.lower(),
     )
     return urlunparse(p2)
 
@@ -177,13 +179,14 @@ def _alt_json_url(index_url: str) -> Optional[str]:
         return index_url[:-4] + ".json"
     return None
 
+
 def query_fts(
     start_date: str,
     end_date: str,
     forms: Tuple[str, ...] = ("6-K", "8-K"),
-    query: str = ""
+    query: str = "",
 ) -> Iterable[Dict[str, Any]]:
-    
+
     forms_csv = ",".join(f.strip() for f in forms if f.strip())
     offset = 0
     batch_size = 100
@@ -205,7 +208,7 @@ def query_fts(
         try:
             data = _get_json_with_retry(params)
             consecutive_failures = 0
-            
+
         except Exception:
             consecutive_failures += 1
             if consecutive_failures >= 3:
@@ -216,7 +219,11 @@ def query_fts(
 
         hits = None
         if isinstance(data, dict):
-            if "hits" in data and isinstance(data["hits"], dict) and "hits" in data["hits"]:
+            if (
+                "hits" in data
+                and isinstance(data["hits"], dict)
+                and "hits" in data["hits"]
+            ):
                 hits = data["hits"]["hits"]
             elif "results" in data and isinstance(data["results"], list):
                 hits = data["results"]
@@ -229,14 +236,14 @@ def query_fts(
 
         if len(hits) < batch_size:
             break
-            
+
         offset += batch_size
         time.sleep(PAGE_SLEEP)
 
 
 def extract_filing_meta(hit: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
     src = hit.get("_source", hit)
-    
+
     def pick(*keys):
         for k in keys:
             v = src.get(k)
@@ -254,23 +261,18 @@ def extract_filing_meta(hit: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
     form = pick("formType", "form", "form_type")
     filed = pick("filedAt", "filed", "file_date", "filed_date")
     company = pick("display_names", "companyName", "company_name", "entity")
-    
+
     if isinstance(company, list):
         company = company[0]
-    
-    return (
-        cik or "",
-        adsh or "",
-        form or "",
-        filed or "",
-        company or ""
-    )
+
+    return (cik or "", adsh or "", form or "", filed or "", company or "")
+
 
 def parse_index_table(html: str) -> List[Dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.find_all("table")
     rows: List[Dict[str, str]] = []
-    
+
     def clean(text):
         return (text or "").strip().replace("\xa0", " ")
 
@@ -279,7 +281,9 @@ def parse_index_table(html: str) -> List[Dict[str, str]]:
         if not headers:
             first_tr = tbl.find("tr")
             if first_tr:
-                headers = [clean(td.get_text()) for td in first_tr.find_all(["th", "td"])]
+                headers = [
+                    clean(td.get_text()) for td in first_tr.find_all(["th", "td"])
+                ]
 
         header_l = [h.lower() for h in headers]
         if "document" not in header_l or "type" not in header_l:
@@ -294,26 +298,38 @@ def parse_index_table(html: str) -> List[Dict[str, str]]:
             tds = tr.find_all("td")
             if not tds or doc_i is None or type_i is None:
                 continue
-            
+
             doc_cell = tds[doc_i] if doc_i < len(tds) else None
-            if doc_cell and not doc_cell.find("a") and doc_cell.get_text(strip=True).lower() == "document":
+            if (
+                doc_cell
+                and not doc_cell.find("a")
+                and doc_cell.get_text(strip=True).lower() == "document"
+            ):
                 continue
-            
+
             type_cell = tds[type_i] if type_i < len(tds) else None
-            desc_cell = tds[desc_i] if (desc_i is not None and desc_i < len(tds)) else None
+            desc_cell = (
+                tds[desc_i] if (desc_i is not None and desc_i < len(tds)) else None
+            )
 
             a = doc_cell.find("a") if doc_cell else None
-            document = clean(a.get("href")) if (a and a.has_attr("href")) else clean(doc_cell.get_text() if doc_cell else "")
-            
+            document = (
+                clean(a.get("href"))
+                if (a and a.has_attr("href"))
+                else clean(doc_cell.get_text() if doc_cell else "")
+            )
+
             if not document:
                 continue
 
-            rows.append({
-                "description": clean(desc_cell.get_text() if desc_cell else ""),
-                "document": document,
-                "type": clean(type_cell.get_text() if type_cell else ""),
-            })
-    
+            rows.append(
+                {
+                    "description": clean(desc_cell.get_text() if desc_cell else ""),
+                    "document": document,
+                    "type": clean(type_cell.get_text() if type_cell else ""),
+                }
+            )
+
     return rows
 
 
@@ -321,14 +337,16 @@ def parse_index_json(js: dict) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     directory = (js or {}).get("directory", {})
     items = directory.get("item", []) or []
-    
+
     for item in items:
-        rows.append({
-            "description": item.get("desc") or "",
-            "document": item.get("href", "") or "",
-            "type": item.get("type", "") or "",
-        })
-    
+        rows.append(
+            {
+                "description": item.get("desc") or "",
+                "document": item.get("href", "") or "",
+                "type": item.get("type", "") or "",
+            }
+        )
+
     return rows
 
 
@@ -337,9 +355,9 @@ def looks_like_ex4(row: Dict[str, str]) -> bool:
     d = (row.get("document", "") or "").strip()
     norm = t.replace(" ", "").upper()
     return bool(
-        EX4_TYPE_RE.search(t) or 
-        norm.startswith(("EX-4", "EX4")) or 
-        EX4_NAME_RE.search(d)
+        EX4_TYPE_RE.search(t)
+        or norm.startswith(("EX-4", "EX4"))
+        or EX4_NAME_RE.search(d)
     )
 
 
@@ -348,23 +366,21 @@ def looks_like_ex99(row: Dict[str, str]) -> bool:
     d = (row.get("document", "") or "").strip()
     norm = t.replace(" ", "").upper()
     return bool(
-        EX99_TYPE_RE.search(t) or 
-        norm.startswith(("EX-99", "EX99")) or 
-        EX99_NAME_RE.search(d)
+        EX99_TYPE_RE.search(t)
+        or norm.startswith(("EX-99", "EX99"))
+        or EX99_NAME_RE.search(d)
     )
 
 
 def has_indenture_signal(row: Dict[str, str]) -> bool:
-    haystack = " ".join([
-        row.get("description", ""), 
-        row.get("document", ""), 
-        row.get("type", "")
-    ])
-    
+    haystack = " ".join(
+        [row.get("description", ""), row.get("document", ""), row.get("type", "")]
+    )
+
     if INDENTURE_HINT_RE.search(haystack):
         if not NEG_NOISE_RE.search(haystack):
             return True
-    
+
     return False
 
 
@@ -377,7 +393,7 @@ def extract_exhibits(cik: str, adsh: str, mode: str = "both") -> List[Dict[str, 
     base_dir_path = _to_base_dir(cik, adsh)
     base_url = f"https://www.sec.gov{base_dir_path}"
     index_url = f"{base_url}/{adsh}-index.html"
-    
+
     time.sleep(PAGE_SLEEP)
     rows: List[Dict[str, str]] = []
     html_content = None
@@ -406,8 +422,19 @@ def extract_exhibits(cik: str, adsh: str, mode: str = "both") -> List[Dict[str, 
             soup = BeautifulSoup(html_content, "html.parser")
             for a in soup.find_all("a"):
                 href = a.get("href", "").lower()
-                if any(ext in href for ext in ['.jpg', '.jpeg', '.png', '.gif', '.css', '.svg', '.webp']):
-                    referenced_files.add(href.split('/')[-1])
+                if any(
+                    ext in href
+                    for ext in [
+                        ".jpg",
+                        ".jpeg",
+                        ".png",
+                        ".gif",
+                        ".css",
+                        ".svg",
+                        ".webp",
+                    ]
+                ):
+                    referenced_files.add(href.split("/")[-1])
         except Exception:
             pass
 
@@ -449,8 +476,14 @@ def extract_exhibits(cik: str, adsh: str, mode: str = "both") -> List[Dict[str, 
                 keep = True
 
         if keep and score == "0":
-            score = "10" if is_ex4 else ("8" if (is_ex99 and ind_ok) else ("6" if is_ex99 else "5"))
-            matched_by = ("type:EX-4" if is_ex4 else "type:EX-99") + ("|indenture" if ind_ok else ("" if score != "4" else "|candidate"))
+            score = (
+                "10"
+                if is_ex4
+                else ("8" if (is_ex99 and ind_ok) else ("6" if is_ex99 else "5"))
+            )
+            matched_by = ("type:EX-4" if is_ex4 else "type:EX-99") + (
+                "|indenture" if ind_ok else ("" if score != "4" else "|candidate")
+            )
 
         if keep:
             doc_name = doc.split("/")[-1]
@@ -465,18 +498,34 @@ def extract_exhibits(cik: str, adsh: str, mode: str = "both") -> List[Dict[str, 
 
     for url, exhibit in main_exhibits.items():
         doc_name = exhibit["doc_name"].lower()
-        if doc_name.endswith(('.htm', '.html')):
+        if doc_name.endswith((".htm", ".html")):
             asset_count = 0
-            base_name = doc_name.rsplit('.', 1)[0]
+            base_name = doc_name.rsplit(".", 1)[0]
             for row in rows:
                 asset_doc = row.get("document", "").lower()
                 if not asset_doc:
                     continue
                 asset_name = asset_doc.split("/")[-1]
-                is_asset = any(ext in asset_name for ext in ['.jpg', '.jpeg', '.png', '.gif', '.css', '.svg', '.webp', '.bmp'])
+                is_asset = any(
+                    ext in asset_name
+                    for ext in [
+                        ".jpg",
+                        ".jpeg",
+                        ".png",
+                        ".gif",
+                        ".css",
+                        ".svg",
+                        ".webp",
+                        ".bmp",
+                    ]
+                )
                 if is_asset:
-                    asset_base = asset_name.rsplit('.', 1)[0]
-                    if base_name in asset_base or asset_base in base_name or asset_name in referenced_files:
+                    asset_base = asset_name.rsplit(".", 1)[0]
+                    if (
+                        base_name in asset_base
+                        or asset_base in base_name
+                        or asset_name in referenced_files
+                    ):
                         asset_count += 1
 
             exhibit["has_dependencies"] = "yes" if asset_count > 0 else "no"
@@ -486,6 +535,8 @@ def extract_exhibits(cik: str, adsh: str, mode: str = "both") -> List[Dict[str, 
             exhibit["asset_count"] = "0"
 
     return list(main_exhibits.values())
+
+
 def run_pipeline(
     start_date: str,
     end_date: str,
@@ -493,12 +544,11 @@ def run_pipeline(
     mode: str = "both",
     forms: Tuple[str, ...] = ("6-K", "8-K"),
     query: str = "",
-    verbose: bool = False
 ):
-    
+
     asset_dir = root_dir / "asset"
     asset_dir.mkdir(parents=True, exist_ok=True)
-    
+
     filings_csv = asset_dir / "filings.csv"
     exhibits_csv = asset_dir / "exhibits.csv"
 
@@ -526,16 +576,23 @@ def run_pipeline(
         return
 
     filing_rows = sorted(
-        filings.values(),
-        key=lambda r: (r.get("filed", ""), r.get("accession", ""))
+        filings.values(), key=lambda r: (r.get("filed", ""), r.get("accession", ""))
     )
 
     with open(filings_csv, "w", newline="", encoding="utf-8") as f:
-        fieldnames = ["cik", "accession", "form", "filed", "company", "exhibit_index_url", "filing_base_dir"]
+        fieldnames = [
+            "cik",
+            "accession",
+            "form",
+            "filed",
+            "company",
+            "exhibit_index_url",
+            "filing_base_dir",
+        ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(filing_rows)
-    print(f"Found {len(filing_rows)} filings")
+    logger.info("Found %d filings", len(filing_rows))
     exhibit_rows: List[Dict[str, str]] = []
 
     for filing in filing_rows:
@@ -544,22 +601,24 @@ def run_pipeline(
         try:
             exhibits = extract_exhibits(cik, adsh, mode=mode)
             for exhibit in exhibits:
-                exhibit_rows.append({
-                    "cik": cik,
-                    "accession": adsh,
-                    "form": filing["form"],
-                    "filed": filing["filed"],
-                    "company": filing["company"],
-                    "exhibit_index_url": filing["exhibit_index_url"],
-                    "doc_url": exhibit["doc_url"],
-                    "doc_name": exhibit["doc_name"],
-                    "doc_description": exhibit.get("doc_description", ""),
-                    "doc_type": exhibit.get("doc_type", ""),
-                    "match_score": exhibit["match_score"],
-                    "matched_by": exhibit["matched_by"],
-                    "has_dependencies": exhibit.get("has_dependencies", "no"),
-                    "asset_count": exhibit.get("asset_count", "0"),
-                })
+                exhibit_rows.append(
+                    {
+                        "cik": cik,
+                        "accession": adsh,
+                        "form": filing["form"],
+                        "filed": filing["filed"],
+                        "company": filing["company"],
+                        "exhibit_index_url": filing["exhibit_index_url"],
+                        "doc_url": exhibit["doc_url"],
+                        "doc_name": exhibit["doc_name"],
+                        "doc_description": exhibit.get("doc_description", ""),
+                        "doc_type": exhibit.get("doc_type", ""),
+                        "match_score": exhibit["match_score"],
+                        "matched_by": exhibit["matched_by"],
+                        "has_dependencies": exhibit.get("has_dependencies", "no"),
+                        "asset_count": exhibit.get("asset_count", "0"),
+                    }
+                )
         except Exception:
             pass
 
@@ -571,5 +630,7 @@ def run_pipeline(
             writer.writerows(exhibit_rows)
 
         unique_filings = len({(r["cik"], r["accession"]) for r in exhibit_rows})
-        print(f"Extracted {len(exhibit_rows)} exhibits from {unique_filings} filings")
+        logger.info(
+            "Extracted %d exhibits from %d filings", len(exhibit_rows), unique_filings
+        )
     SESSION.close()

@@ -5,5 +5,6 @@ ignore = [".venv", "build", "dist"]
 disable = [
   "missing-module-docstring",
   "missing-function-docstring",
-  "broad-exception-caught"
+  "broad-exception-caught",
+  "missing-class-docstring"
 ]

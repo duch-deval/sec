@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
+import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
 
+logger = logging.getLogger(__name__)
+
 try:
     from phase1 import run_pipeline as run_phase1
 except ImportError:
-    print("ERROR: phase1.py not found")
+    logger.error("ERROR: phase1.py not found")
     sys.exit(1)
 try:
     from phase2 import run_pipeline as run_phase2
@@ -60,7 +63,7 @@ def execute_phase1(
         )
         return True
     except Exception as e:
-        print(f"Phase 1 failed: {e}")
+        logger.exception("Phase 1 failed: %s", e)
         return False
 
 
@@ -71,7 +74,7 @@ def execute_phase2(root_dir: Path, config: dict) -> bool:
         run_phase2(root_dir=root_dir, verbose=True)
         return True
     except Exception as e:
-        print(f"Phase 2 failed: {e}")
+        logger.exception("Phase 2 failed: %s", e)
         return False
 
 
@@ -81,7 +84,7 @@ def execute_phase3(root_dir: Path, config: dict) -> bool:
     try:
         return run_phase3(root_dir=root_dir, verbose=True)
     except Exception as e:
-        print(f"Phase 3 failed: {e}")
+        logger.exception("Phase 3 failed: %s", e)
         return False
 
 
@@ -93,7 +96,7 @@ def run_pipeline(start_date: str, end_date: str, root_dir: Path, config: dict = 
     results = {}
 
     for phase_num in sorted(enabled_phases):
-        print(f"\nPhase {phase_num}: {PIPELINE_PHASES[phase_num]['name']}")
+        logger.info("Phase %d: %s", phase_num, PIPELINE_PHASES[phase_num]["name"])
 
         if phase_num == 1:
             success = execute_phase1(start_date, end_date, root_dir, config)
@@ -117,13 +120,13 @@ def run_data_collection():
     ).strip()
 
     if not date_input:
-        print("Error: No date provided")
+        logger.error("Error: No date provided")
         sys.exit(1)
 
     try:
         start_date, end_date = parse_date_input(date_input)
     except ValueError as e:
-        print(f"Error: {e}")
+        logger.error("Error: %s", e)
         sys.exit(1)
 
     dates = list(generate_dates(start_date, end_date))
@@ -131,11 +134,11 @@ def run_data_collection():
 
     try:
         for idx, date in enumerate(dates, 1):
-            print(f"Date {idx}/{len(dates)}: {date}")
+            logger.info("Date %d/%d: %s", idx, len(dates), date)
             success = run_pipeline(date, date, Path(date))
             if not success:
                 all_success = False
         sys.exit(0 if all_success else 1)
     except Exception as e:
-        print(f"\nError: {e}")
+        logger.exception("Error: %s", e)
         sys.exit(1)

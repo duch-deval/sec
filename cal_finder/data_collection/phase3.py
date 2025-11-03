@@ -7,13 +7,16 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
+import logging
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    print("ERROR: BeautifulSoup required.")
+    logger.error("ERROR: BeautifulSoup required.")
     import sys
 
     sys.exit(1)
@@ -31,14 +34,6 @@ SESSION.headers.update(
         "Accept": "text/html,application/xhtml+xml,*/*",
     }
 )
-
-
-def log_error(msg):
-    print(f"Error: {msg}")
-
-
-def log_warning(msg):
-    print(f"Warning: {msg}")
 
 
 class AssetManager:
@@ -71,7 +66,7 @@ class AssetManager:
             return safe_name
 
         except Exception as e:
-            log_error(f"Failed to save image {url}: {e}")
+            logger.exception("Failed to save image %s: %s", url, e)
             return None
 
 
@@ -87,13 +82,19 @@ class DocumentDownloader:
                 resp = SESSION.get(url, timeout=REQUEST_TIMEOUT)
                 resp.raise_for_status()
                 return resp.content
-
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries - 1:
                     delay = RETRY_BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Fetch attempt %d failed for %s (%s). Retrying in %.1fs",
+                        attempt + 1,
+                        url,
+                        e,
+                        delay,
+                    )
                     time.sleep(delay)
                 else:
-                    log_error(f"Download failed: {url}")
+                    logger.exception("Download failed: %s", url)
                     return None
 
     def extract_dependencies(self, htm_content: bytes, base_url: str) -> List[str]:
@@ -115,7 +116,7 @@ class DocumentDownloader:
             return urls
 
         except Exception as e:
-            log_error(f"Failed to extract dependencies: {e}")
+            logger.exception("Failed to extract dependencies: %s", e)
             return []
 
     def rewrite_paths(
@@ -155,7 +156,7 @@ class DocumentDownloader:
             return text.encode("utf-8", errors="replace")
 
         except Exception as e:
-            log_error(f"Path rewriting failed: {e}")
+            logger.exception("Path rewriting failed: %s", e)
             return htm_content
 
 
@@ -220,24 +221,24 @@ class Phase3Pipeline:
     def run(self):
         classified_csv = self.asset_dir / "exhibits_classified.csv"
         if not classified_csv.exists():
-            log_error(f"exhibits_classified.csv not found")
+            logger.error("exhibits_classified.csv not found")
             return False
 
         documents = self._load_documents(classified_csv)
         if not documents:
-            log_error("No documents to download")
+            logger.error("No documents to download")
             return False
 
-        print(f"Downloading {len(documents)} documents...")
+        logger.info("Downloading %d documents...", len(documents))
 
-        for i, batch in enumerate(
-            self._batch_documents(documents, DOWNLOAD_BATCH_SIZE)
-        ):
-            for idx, doc in enumerate(batch, 1):
-                self._process_document(doc, idx, len(batch))
+        for batch in self._batch_documents(documents, DOWNLOAD_BATCH_SIZE):
+            for doc in batch:
+                self._process_document(doc)
 
-        print(
-            f"Done: {self.stats['downloaded']} docs, {self.stats['images_saved']} images\n"
+        logger.info(
+            "Done: %d docs, %d images",
+            self.stats["downloaded"],
+            self.stats["images_saved"],
         )
 
         return self.stats["failed"] == 0
@@ -264,20 +265,22 @@ class Phase3Pipeline:
         for i in range(0, len(documents), batch_size):
             yield documents[i : i + batch_size]
 
-    def _process_document(self, doc: Dict, batch_idx: int, batch_size: int):
+    def _process_document(self, doc: Dict):
         doc_url = doc.get("doc_url", "").strip()
         doc_name = doc.get("doc_name", "unknown").strip()
         category = doc.get("category", "uncertain").strip()
 
         if not doc_url:
+            logger.error("Missing doc_url for %s (%s)", doc_name, category)
             self.stats["failed"] += 1
             return
 
         if self.stats["total"] > 0 and self.stats["total"] % 10 == 0:
-            print(f"  {self.stats['total']} processed...")
+            logger.info("  %d processed...", self.stats["total"])
 
         htm_content = self.downloader.fetch_with_retry(doc_url)
         if not htm_content:
+            logger.error("Failed to fetch %s", doc_url)
             self.stats["failed"] += 1
             return
 
@@ -302,11 +305,11 @@ class Phase3Pipeline:
                 )
 
         try:
-            saved_path = self.organizer.save_document(htm_content, doc_name, category)
+            self.organizer.save_document(htm_content, doc_name, category)
             self.stats["downloaded"] += 1
             self.stats["by_category"][category] += 1
         except Exception as e:
-            log_error(f"Failed to save {doc_name}: {e}")
+            logger.exception("Failed to save %s: %s", doc_name, e)
             self.stats["failed"] += 1
 
 
@@ -315,8 +318,5 @@ def run_pipeline(root_dir: Path, verbose: bool = False) -> bool:
         pipeline = Phase3Pipeline(root_dir, verbose)
         return pipeline.run()
     except Exception as e:
-        print(f"Phase 3 error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception("Phase 3 error: %s", e)
         return False
