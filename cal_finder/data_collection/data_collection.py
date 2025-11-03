@@ -8,16 +8,16 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 try:
-    from phase1 import run_pipeline as run_phase1
+    from .phase1 import run_pipeline as run_phase1
 except ImportError:
     logger.error("ERROR: phase1.py not found")
     sys.exit(1)
 try:
-    from phase2 import run_pipeline as run_phase2
+    from .phase2 import run_pipeline as run_phase2
 except ImportError:
     run_phase2 = None
 try:
-    from phase3 import run_pipeline as run_phase3
+    from .phase3 import run_pipeline as run_phase3
 except ImportError:
     run_phase3 = None
 
@@ -59,7 +59,6 @@ def execute_phase1(
             mode=config.get("mode", "both"),
             forms=tuple(config.get("forms", ["6-K", "8-K"])),
             query=config.get("query", ""),
-            verbose=True,
         )
         return True
     except Exception as e:
