@@ -66,7 +66,7 @@ def execute_phase1(
         return False
 
 
-def execute_phase2(root_dir: Path, config: dict) -> bool:
+def execute_phase2(root_dir: Path) -> bool:
     if not run_phase2:
         return False
     try:
@@ -77,7 +77,7 @@ def execute_phase2(root_dir: Path, config: dict) -> bool:
         return False
 
 
-def execute_phase3(root_dir: Path, config: dict) -> bool:
+def execute_phase3(root_dir: Path) -> bool:
     if not run_phase3:
         return False
     try:
@@ -100,9 +100,9 @@ def run_pipeline(start_date: str, end_date: str, root_dir: Path, config: dict = 
         if phase_num == 1:
             success = execute_phase1(start_date, end_date, root_dir, config)
         elif phase_num == 2:
-            success = execute_phase2(root_dir, config)
+            success = execute_phase2(root_dir)
         elif phase_num == 3:
-            success = execute_phase3(root_dir, config)
+            success = execute_phase3(root_dir)
         else:
             success = False
 
