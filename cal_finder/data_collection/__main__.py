@@ -1,7 +1,6 @@
 import logging
 import sys
-from cal_finder.data_collection import run_data_collection
-from cal_finder.text_extraction import run_text_extraction
+from .data_collection import run_data_collection
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -12,4 +11,3 @@ logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     run_data_collection()
-    run_text_extraction()
