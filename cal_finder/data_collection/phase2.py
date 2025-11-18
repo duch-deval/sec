@@ -47,8 +47,6 @@ def parse_exhibit_number(doc_type: str) -> tuple:
 def has_keyword(text: str, keywords: List[str]) -> bool:
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in keywords)
-
-
 def has_strong_indenture_keyword(text: str) -> bool:
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in STRONG_INDENTURE_KEYWORDS)
@@ -179,6 +177,7 @@ def classify_exhibit(row: Dict[str, str], filing_has_ex4: bool = False) -> Dict[
         'confidence': 'high',
         'reason': 'No indenture signals detected',
         'priority': 999
+
     }
 
 
@@ -186,7 +185,6 @@ def run_pipeline(root_dir: Path, verbose: bool = False):
     asset_dir = root_dir / "asset"
     exhibits_csv = asset_dir / "exhibits.csv"
     output_csv = asset_dir / "exhibits_classified.csv"
-    
     if not exhibits_csv.exists():
         raise FileNotFoundError(f"Phase 1 output not found: {exhibits_csv}")
     
@@ -257,3 +255,4 @@ def run_pipeline(root_dir: Path, verbose: bool = False):
     if verbose:
         total_indentures = stats['indenture'] + stats['image_based_indenture']
         print(f"{total_indentures} indentures identified")
+
