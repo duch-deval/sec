@@ -20,6 +20,10 @@ try:
     from .phase3 import run_pipeline as run_phase3
 except ImportError:
     run_phase3 = None
+try:
+    from .phase4 import run_pipeline as run_phase4
+except ImportError:
+    run_phase4 = None
 
 
 def parse_date_input(date_input: str) -> Tuple[str, str]:
@@ -45,6 +49,7 @@ PIPELINE_PHASES = {
     1: {"name": "Filing & Exhibit Extraction", "enabled": True},
     2: {"name": "Exhibit Classification", "enabled": bool(run_phase2)},
     3: {"name": "Document Download & Organization", "enabled": bool(run_phase3)},
+    4: {"name": "Content Filtering", "enabled": bool(run_phase4)},
 }
 
 
@@ -87,6 +92,16 @@ def execute_phase3(root_dir: Path) -> bool:
         return False
 
 
+def execute_phase4(root_dir: Path) -> bool:
+    if not run_phase4:
+        return False
+    try:
+        return run_phase4(root_dir=root_dir, verbose=True)
+    except Exception as e:
+        logger.exception("Phase 4 failed: %s", e)
+        return False
+
+
 def run_pipeline(start_date: str, end_date: str, root_dir: Path, config: dict = None):
     if config is None:
         config = {"mode": "both", "forms": ["6-K", "8-K"], "query": ""}
@@ -103,6 +118,8 @@ def run_pipeline(start_date: str, end_date: str, root_dir: Path, config: dict = 
             success = execute_phase2(root_dir)
         elif phase_num == 3:
             success = execute_phase3(root_dir)
+        elif phase_num == 4:
+            success = execute_phase4(root_dir)
         else:
             success = False
 
