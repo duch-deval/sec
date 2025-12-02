@@ -1,2 +1,8 @@
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
 def run_text_extraction():
-    print("Text Extraction")
+    logger.info("Text Extraction")
