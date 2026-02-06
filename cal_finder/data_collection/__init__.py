@@ -1,1 +1,0 @@
-from .data_collection import run_data_collection

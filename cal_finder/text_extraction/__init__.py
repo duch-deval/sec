@@ -1,1 +1,0 @@
-from .text_extraction import run_text_extraction

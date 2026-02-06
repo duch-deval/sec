@@ -5,6 +5,16 @@ venv/
 .env
 .vscode/
 .idea/
+.DS_Store
+
+# Corpus data (not deliverable)
 */asset/
 20*/
-.DS_Store
+*.csv
+*.json
+*.xlsx
+~$*
+*/exhibits/
+*/2026-*/
+*/Drexel Payment Calendar Examples_*/
+extract_corpus_text.py

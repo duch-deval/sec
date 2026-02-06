@@ -1,6 +1,6 @@
 import logging
 import sys
-from .data_collection import run_data_collection
+from .build_corpus import run_data_collection
 
 logging.basicConfig(
     level=logging.INFO,
