@@ -1,20 +1,22 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.env
-.vscode/
-.idea/
-.DS_Store
+# Corpus data folders
+cal_finder/2026-*/
+cal_finder/Feb13-27/
+cal_finder/__pycache__/
+cal_finder/extract_corpus_text.cpython-*.pyc
 
-# Corpus data (not deliverable)
-*/asset/
-20*/
-*.csv
-*.json
-*.xlsx
-~$*
-*/exhibits/
-*/2026-*/
-*/Drexel Payment Calendar Examples_*/
-extract_corpus_text.py
+# Bloomberg sample data
+Drexel Payment Calendar Examples_Nov 2025/
+Drexel Payment Calendar Examples_Feb 2026/
+Drexel Payment Calendar Examples_Nov 2025.xlsx
+Drexel Payment Calendar Examples_Feb 2026.xlsx
+Feb13-27.xlsx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Secrets
+.env
+*.key

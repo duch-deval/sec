@@ -45,6 +45,7 @@ def classify_exhibit(row: Dict[str, str], filing_has_ex4: bool) -> Dict[str, str
     asset_count = int(row.get('asset_count', 0))
     major, minor = parse_exhibit_number(doc_type)
     combined = f"{doc_type} {doc_name} {doc_desc}".lower()
+    form = row.get('form', '').strip().upper()
     is_image = asset_count >= IMAGE_ASSET_THRESHOLD
 
     base = {'is_image_based': 'yes' if is_image else 'no'}
@@ -62,6 +63,9 @@ def classify_exhibit(row: Dict[str, str], filing_has_ex4: bool) -> Dict[str, str
                 'reason': f'EX-{label} exhibit', 'priority': 1}
 
     if major == 99:
+        if form == '8-K' and minor == 1:
+            return {**base, 'category': 'ex99_8k_excluded', 'download_action': 'skip', 'confidence': 'high',
+                    'reason': 'EX-99.1 excluded for 8-K filings per Bloomberg QA', 'priority': 999}
         label = f'99.{minor}' if minor else '99'
         if has_kw(combined, STRONG_INDENTURE_KW):
             return {**base, 'category': 'ex99_indenture', 'download_action': 'download', 'confidence': 'high',

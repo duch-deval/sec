@@ -12,7 +12,41 @@ import openpyxl
 
 logger = logging.getLogger(__name__)
 
-# Configuration
+
+def _cusip_check_digit(cusip8: str) -> Optional[int]:
+    """Calculate CUSIP Luhn mod-10 check digit for first 8 characters."""
+    values = []
+    for c in cusip8.upper():
+        if c.isdigit():
+            values.append(int(c))
+        elif c.isalpha():
+            values.append(ord(c) - ord('A') + 10)
+        elif c in ('*', '@', '#'):
+            values.append({'*': 36, '@': 37, '#': 38}[c])
+        else:
+            return None
+    if len(values) != 8:
+        return None
+    total = 0
+    for i, v in enumerate(values):
+        if i % 2 == 1:
+            v *= 2
+        total += v // 10 + v % 10
+    return (10 - total % 10) % 10
+
+
+def _is_valid_cusip(cusip9: str) -> bool:
+    """Validate a 9-character CUSIP using its check digit."""
+    if len(cusip9) != 9:
+        return False
+    expected = _cusip_check_digit(cusip9[:8])
+    if expected is None:
+        return False
+    try:
+        return int(cusip9[8]) == expected
+    except ValueError:
+        return False
+
 @dataclass(frozen=True)
 class ExtractionConfig:
     location_mapping: Dict[str, str]
@@ -25,7 +59,7 @@ class ExtractionConfig:
         return cls(
             location_mapping={loc.lower(): code for loc, code in location_mapping.items()},
             compiled_security_patterns=[(re.compile(pat, re.IGNORECASE), ptype) for pat, ptype in security_patterns],
-            compiled_cusip_pattern=re.compile(r"CUSIP.{0,40}?([0-9A-Z]{6})\s*([0-9A-Z]{2}[0-9])", re.IGNORECASE | re.DOTALL),
+            compiled_cusip_pattern=re.compile(r"CUSIP.{0,60}?([0-9A-Z]{6})\s*([0-9A-Z]{2}[0-9])", re.IGNORECASE | re.DOTALL),
         )
 
     @staticmethod
@@ -46,7 +80,6 @@ class ExtractionConfig:
 
 
 
-# Pattern tables
 _MONTH = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)'
 _OPT_FULL_DATE = rf'(?:{_MONTH}\s+\d{{1,2}},?\s+)?'
 
@@ -66,11 +99,13 @@ SECURITY_PATTERNS = [
     (r"(\d+(?:\.\d+)?%\s+(?:Class\s+[A-Z0-9-]+\s+)?Asset[- ]?[Bb]acked\s+Notes?)", "asset_backed"),
     (r"(\d+(?:\.\d+)?%\s+(?:Auto\s+Loan\s+)?Asset\s+Backed\s+Notes?)", "asset_backed"),
     (r"(\d+(?:\.\d+)?%\s+(?:Floating\s+Rate\s+)?Asset[- ]?[Bb]acked\s+Notes?)", "asset_backed"),
+    (rf"(Floating\s+Rate\s+(?:Senior\s+)?(?:Secured\s+)?(?:Subordinated\s+)?Notes?\s+[Dd]ue\s+{_OPT_FULL_DATE}20\d{{2}})", "year_no_pct"),
     (rf"(\d+(?:\.\d+)?%\s+[\w\s\-,]{{3,80}}?\b[Dd]ue\s+{_OPT_FULL_DATE}20\d{{2}})", "year"),
 ]
 
 LOCATION_PATTERNS = [
     (r'federal reserve bank of new york', 'Federal Reserve Bank of New York'),
+    (r'u\.?s\.?\s+government\s+securities\s+business\s+day', 'U.S. Government Securities Business Day'),
     (r'trans-european automated real-time gross settlement express transfer system \(the target2? system\)', 'TARGET'),
     (r'trans-european automated real-time gross settlement express transfer system', 'TARGET'),
     (r'target2 system', 'TARGET'),
@@ -109,6 +144,8 @@ LOCATION_PATTERNS = [
     (r'\boslo\b', 'Oslo'),
     (r'\bsao paulo\b', 'Sao Paulo'),
     (r'\bmadrid\b', 'Madrid'),
+    (r"people'?s\s+republic\s+of\s+china", 'China'),
+    (r'\bchina\b', 'China'),
     (r'\bhong kong\b', 'Hong Kong'),
     (r'\bbangkok\b', 'Bangkok'),
     (r'\bsingapore\b', 'Singapore'),
@@ -117,6 +154,17 @@ LOCATION_PATTERNS = [
     (r'\bamsterdam\b', 'Amsterdam'),
     (r'\bireland\b', 'Ireland'),
 ]
+
+US_STATES = {
+    'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut',
+    'delaware', 'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa',
+    'kansas', 'kentucky', 'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan',
+    'minnesota', 'mississippi', 'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire',
+    'new jersey', 'new mexico', 'new york', 'north carolina', 'north dakota', 'ohio',
+    'oklahoma', 'oregon', 'pennsylvania', 'rhode island', 'south carolina', 'south dakota',
+    'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington', 'west virginia',
+    'wisconsin', 'wyoming', 'district of columbia',
+}
 
 GOVERNING_LAW_MAPPING = {
     'new york': 'US-NY', 'state of new york': 'US-NY',
@@ -161,19 +209,19 @@ GOVERNING_LAW_FALSE_POSITIVES = [
 
 GOVERNING_LAW_TYPE_KEYWORDS = {
     'Subordination': [r'\bsubordination\b', r'\bsubordinated\b'],
-    'Collateral': [r'\bcollateral\b(?!\s+agent)', r'\bsecurity\s+interest\b', r'\bpledge\b'],
+    'Collateral': [r'\bcollateral\b(?!\s+agent)', r'\bsecurity\s+interest\b', r'\bpledge\b', r'\bguarantee[s]?\b'],
     'Disposition': [r'\bdisposition[s]?\b', r'\btransfer[s]?\s+(?:of|and)\b', r'\bassignment[s]?\b'],
 }
 
 EXPORT_COLUMNS = [
-    "Company ", "File Date", "File Type", "File Link ", "Description of Exhibit", "Exhibit",
+    "Company ", "File Date", "File Type", "File Link ", "Exhibit",
     "Security Description", "CUSIP", "ISIN",
     "Coupon Rate", "Issue Size", "Maturity Date",
     "Text", "Business Days - Standardized", "Mapping",
     "Governing Law Text", "Governing Law Type", "Governing Law", "Governing Law Code",
+    "Base Indenture Reference",
 ]
 
-# Helpers
 def normalize_text(text: str) -> str:
     for old, new in [('\x93', '"'), ('\x94', '"'), ('\x91', "'"), ('\x92', "'"),
                      ('\u201c', '"'), ('\u201d', '"'), ('\u2018', "'"), ('\u2019', "'"),
@@ -194,14 +242,58 @@ def read_html(filepath: Path) -> Optional[str]:
         logger.warning("Failed to parse %s: %s", filepath, e)
         return None
 
-# Extractor
 class FieldExtractor:
 
     def __init__(self, config: ExtractionConfig):
         self.config = config
 
-    # Security Description 
-    def extract_securities(self, text: str) -> Optional[str]:
+    def _find_legacy_table_spans(self, text: str) -> List[Tuple[int, int]]:
+        normalized = re.sub(r"\s+", " ", text)
+        spans = []
+
+        TABLE_HEADER_RE = re.compile(
+            r'(?:Series|Bonds?)\s+.{0,80}?'
+            r'(?:Due\s+Date|Maturity|Date\s+of\s+Issue).{0,80}?'
+            r'(?:Principal\s+Amount|Amount\s+(?:Issued|Outstanding)|Aggregate)',
+            re.IGNORECASE
+        )
+        for m in TABLE_HEADER_RE.finditer(normalized):
+            start = m.start()
+            end_markers = [
+                re.search(r'\b(?:NOW,?\s*THEREFORE|GRANTING\s+CLAUSES|ARTICLE\s+[IVX\d]|There\s+shall\s+be\s+a\s+series)\b',
+                           normalized[start + 200:start + 8000], re.IGNORECASE),
+            ]
+            end = start + 8000
+            for em in end_markers:
+                if em:
+                    end = start + 200 + em.start()
+                    break
+            spans.append((start, end))
+
+        WHEREAS_RE = re.compile(
+            r'WHEREAS.{0,100}?(?:heretofore\s+(?:issued|created|established)|'
+            r'bonds?\s+(?:heretofore|previously|outstanding)|'
+            r'series\s+(?:heretofore|previously|outstanding))',
+            re.IGNORECASE
+        )
+        for m in WHEREAS_RE.finditer(normalized):
+            start = m.start()
+            end_match = re.search(r'\b(?:NOW,?\s*THEREFORE|WHEREAS(?!.{0,30}heretofore))\b',
+                                  normalized[start + 100:start + 6000], re.IGNORECASE)
+            end = start + 100 + end_match.start() if end_match else start + 6000
+            spans.append((start, end))
+
+        SCHEDULE_RE = re.compile(
+            r'(?:schedule|list|table)\s+(?:of\s+)?(?:outstanding|existing|previously\s+issued)\s+'
+            r'(?:bonds?|notes?|securities|series)',
+            re.IGNORECASE
+        )
+        for m in SCHEDULE_RE.finditer(normalized):
+            spans.append((m.start(), m.start() + 5000))
+
+        return spans
+
+    def extract_securities(self, text: str, exclude_spans: List[Tuple[int, int]] = None) -> Optional[str]:
         if not text:
             return None
 
@@ -210,12 +302,21 @@ class FieldExtractor:
 
         for compiled_pat, ptype in self.config.compiled_security_patterns:
             for m in compiled_pat.finditer(normalized):
+                if exclude_spans and any(s <= m.start() < e for s, e in exclude_spans):
+                    continue
                 desc = m.group(1)
                 pct_match = re.search(r'(\d+(?:\.\d+)?)%', desc)
-                if not pct_match:
-                    continue
 
-                pct_key = f"{float(pct_match.group(1)):g}"
+                if ptype == "year_no_pct":
+                    year = re.search(r'(20\d{2})', desc)
+                    if not year:
+                        continue
+                    pct_key = "floating"
+                    key = (pct_key, year.group(1))
+                elif not pct_match:
+                    continue
+                else:
+                    pct_key = f"{float(pct_match.group(1)):g}"
 
                 if ptype == "series":
                     series = re.search(r'Series\s+(\d+)', desc, re.IGNORECASE)
@@ -240,6 +341,12 @@ class FieldExtractor:
 
                 if key in seen:
                     continue
+                if ptype == "year_no_pct":
+                    year_val = key[1]
+                    has_ftf = any('fixed' in s.lower() and 'float' in s.lower() and year_val in s
+                                  for _, s in found)
+                    if has_ftf:
+                        continue
                 seen.add(key)
                 cleaned = self._capitalize_terms(re.sub(r"\s+", " ", desc).strip())
                 found.append((key, cleaned))
@@ -255,8 +362,6 @@ class FieldExtractor:
             text = re.sub(rf"\b{old}\b", new, text, flags=re.IGNORECASE)
         return text
 
-    # CUSIP 
-
     def extract_cusips(self, text: str) -> Optional[str]:
         if not text:
             return None
@@ -269,42 +374,38 @@ class FieldExtractor:
             cusip = base + check
             if not re.search(r"\d", base):
                 continue
+            if not _is_valid_cusip(cusip):
+                continue
 
             formatted = f"{cusip[:6]} {cusip[6:]}"
             if formatted not in seen:
                 seen.add(formatted)
                 found.append(formatted)
 
-            after = normalized[m.end():]
-
-            # Separator-delimited dual CUSIP
-            if re.match(r'^[^I]{0,15}?[/;,\]]|^.{0,10}?\band\b', after):
-                dual = re.match(r'.{0,20}?([0-9A-Z]{6})\s*([0-9A-Z]{2}[0-9])', after)
-                if dual and re.search(r'\d', dual.group(1)):
-                    dcusip = dual.group(1).upper() + dual.group(2).upper()
-                    df = f"{dcusip[:6]} {dcusip[6:]}"
-                    if df not in seen:
-                        seen.add(df)
-                        found.append(df)
-            # Bare adjacent CUSIP
-            elif re.match(r'^\s+[0-9A-Z]', after):
-                bare = re.match(r'^\s+([0-9A-Z]{6})([0-9A-Z]{2}[0-9])\b', after)
-                if bare and re.search(r'\d', bare.group(1)):
-                    bcusip = bare.group(1).upper() + bare.group(2).upper()
-                    bf = f"{bcusip[:6]} {bcusip[6:]}"
-                    if bf not in seen:
-                        seen.add(bf)
-                        found.append(bf)
+            window = normalized[m.end():m.end() + 200]
+            isin_boundary = re.search(r'\bISIN\b', window)
+            if isin_boundary:
+                window = window[:isin_boundary.start()]
+            for extra in re.finditer(r'([0-9A-Z]{6})\s*([0-9A-Z]{2}[0-9])', window):
+                ebase, echeck = extra.group(1).upper(), extra.group(2).upper()
+                if not re.search(r'\d', ebase):
+                    continue
+                ecusip = ebase + echeck
+                if not _is_valid_cusip(ecusip):
+                    continue
+                ef = f"{ecusip[:6]} {ecusip[6:]}"
+                if ef not in seen:
+                    seen.add(ef)
+                    found.append(ef)
 
         return "; ".join(found) if found else None
 
-    # ISIN
     def extract_isins(self, text: str) -> Optional[str]:
         if not text:
             return None
 
         found, seen = [], set()
-        for m in re.finditer(r'\b([A-Z]{2}[A-Z0-9]{9}[0-9])\b', text):
+        for m in re.finditer(r'\b([A-Z]{2}[A-Z0-9]{9}[0-9])(?=\b|[A-Z]{2,}|$)', text):
             isin = m.group(1).upper()
             if isin not in seen and re.search(r'\d', isin[2:11]):
                 seen.add(isin)
@@ -312,7 +413,6 @@ class FieldExtractor:
 
         return "; ".join(found) if found else None
 
-    #  Business Day Definition 
     def extract_business_day_definition(self, text: str) -> Optional[str]:
         if not text:
             return None
@@ -320,10 +420,10 @@ class FieldExtractor:
         normalized = normalize_text(text)
 
         bd_patterns = [
-            r'"Business Day"\s*when\s+used\s+with\s+respect\s+to[^.]*means[^.]*(?:\.[^.]*)?',
-            r'"Business Day"\s*means[,]?\s*[^.]*(?:\.[^.]*)?(?:\.[^.]*)?',
-            r'"Business Day"\s*shall\s+mean\s*[^.]*(?:\.[^.]*)?',
-            r'(?:a|each|an?)\s+Business Day\s+means\s+[^.]*\.',
+            r'["\u201c][\'"]?\s*Business\s+Day\s*[\'"]?\s*["\u201d]?\s*,?\s*when\s+used\s+with\s+respect\s+to[^.]*means[^.]*(?:\.[^.]*)?',
+            r'["\u201c][\'"]?\s*Business\s+Day\s*[\'"]?\s*["\u201d]?\s*means[,]?\s*[^.]*(?:\.[^.]*)?(?:\.[^.]*)?',
+            r'["\u201c][\'"]?\s*Business\s+Day\s*[\'"]?\s*["\u201d]?\s*shall\s+mean\s*[^.]*(?:\.[^.]*)?',
+            r'(?:a|each|an?)\s+Business\s+Day\s+means\s+[^.]*\.',
         ]
 
         bd_text = None
@@ -335,7 +435,6 @@ class FieldExtractor:
         if not bd_text:
             return None
 
-        # Follow "Legal Holiday" indirection
         if re.search(r'means[,]?\s*(?:any|each)\s+day\s+(?:which\s+is\s+not|other\s+than)\s+a\s+Legal\s+Holiday', bd_text, re.IGNORECASE):
             for lh_pattern in [r'"Legal Holiday"\s*means\s*[^.]*\.', r'"Legal Holiday"\s*is\s*[^.]*\.',
                                r'[Aa]\s*"Legal Holiday"\s*is\s*[^.]*\.']:
@@ -377,36 +476,99 @@ class FieldExtractor:
             if name not in seen:
                 seen.add(name)
                 ordered.append(name)
+
+        for city in self._extract_fallback_cities(definition, ordered):
+            if city not in seen:
+                seen.add(city)
+                ordered.append(city)
+
         return ordered
+
+    def _extract_fallback_cities(self, definition: str, already_found: List[str]) -> List[str]:
+        _REAL_PERIOD = r'(?<!\bSt)(?<!\bFt)(?<!\bMt)(?<!\b[NSEW])(?<!\bD\.C)(?<!\bU\.S)[.;]'
+        CITY_ANCHORS = [
+            re.compile(
+                r'(?:banking\s+institutions|banks|trust\s+companies)\s+(?:in|of)\s+'
+                r'(?:the\s+(?:City\s+of|Borough\s+of)\s+)?'
+                r'([A-Z][A-Za-z.\s,]+?)'
+                r'(?=\s+(?:are|is|which|nor|not|shall|that|where)\b|' + _REAL_PERIOD + r')',
+                re.DOTALL),
+            re.compile(
+                r'(?:open\s+for\s+business|close|closed)\s+in\s+'
+                r'(?:the\s+(?:City\s+of|Borough\s+of)\s+)?'
+                r'([A-Z][A-Za-z.\s,]+?)'
+                r'(?=\s+(?:are|is|which|nor|not|shall|that|where|and\s+which)\b|' + _REAL_PERIOD + r')',
+                re.DOTALL),
+            re.compile(
+                r'(?:to\s+close|authorized.{0,40}?close)\s+in\s+'
+                r'(?:the\s+(?:City\s+of|Borough\s+of)\s+)?'
+                r'([A-Z][A-Za-z.\s,]+?)'
+                r'(?=\s+(?:nor|not|shall|that|where)\b|' + _REAL_PERIOD + r')',
+                re.DOTALL | re.IGNORECASE),
+        ]
+
+        found_lower = set()
+        for c in already_found:
+            normalized = c.lower().replace(' city', '').strip()
+            found_lower.add(normalized)
+        found_lower.add('manhattan')
+
+        all_raw = []
+        for pattern in CITY_ANCHORS:
+            all_raw.extend(pattern.findall(definition))
+
+        new_cities = []
+        seen = set()
+        for raw in all_raw:
+            parts = re.split(r'\s*(?:,\s*(?:or|and)\s*|,\s+|\s+(?:or|and)\s+)', raw.strip())
+            for p in parts:
+                p = p.strip().rstrip(',').strip()
+                if not p or len(p) < 2 or not p[0].isupper():
+                    continue
+                if p.lower() in US_STATES or p.lower() in {'united kingdom', 'united states', 'united arab emirates'}:
+                    continue
+                if p.lower() in {'the', 'a', 'an', 'any', 'each', 'saturday', 'sunday', 'monday'}:
+                    continue
+                p_norm = re.sub(r'^the\s+(?:city|borough)\s+of\s+', '', p.lower()).strip()
+                if p_norm in found_lower or p.lower().replace(' city', '') in found_lower:
+                    continue
+                if p.lower() in seen:
+                    continue
+                seen.add(p.lower())
+                new_cities.append(p)
+
+        return new_cities
 
     def map_locations_to_codes(self, locations: List[str]) -> List[str]:
         codes, seen_codes = [], set()
         for loc in locations:
             code = self.config.location_mapping.get(loc.lower())
-            if code and code not in seen_codes:
+            if not code:
+                code = ''
+                logger.info("Location '%s' not in mapping, leaving blank", loc)
+            if code not in seen_codes:
                 codes.append(code)
                 seen_codes.add(code)
-            elif not code:
-                logger.warning("Location '%s' not in mapping", loc)
         return codes
 
-    # Governing Law 
     def extract_governing_law(self, text: str) -> List[Dict[str, str]]:
-        """Returns list of dicts: {text, type, location, code}."""
         if not text:
             return []
         normalized = normalize_text(text)
         section_text = self._find_governing_law_section(normalized)
-        if not section_text:
-            section_text = self._find_bare_governing_clauses(normalized)
-        return self._parse_governing_law_clauses(section_text) if section_text else []
+        if section_text:
+            results = self._parse_governing_law_from_section(section_text)
+            if results:
+                return results
+        bare_text = self._find_bare_governing_clauses(normalized)
+        return self._parse_governing_law_from_section(bare_text) if bare_text else []
 
     def _find_governing_law_section(self, text: str) -> Optional[str]:
         heading_patterns = [
             r'(?:Section|SECTION)\s+[\d.]+\.?\s*(?:Governing\s+Law|GOVERNING\s+LAW|Applicable\s+Law)(?:[.;:]\s*)(.*?)(?=(?:(?<!\bthis\s)(?<!\bof\s)(?<!\bsaid\s)(?:Section|SECTION))\s+[\d.]+[.\s]+[A-Z])',
             r'\(\d+\)\s*(?:Governing\s+Law|GOVERNING\s+LAW)(?:[.;:]\s*)(.*?)(?=\(\d+\)\s*[A-Z])',
             r'\b\d+\.\s*(?:Governing\s+Law|GOVERNING\s+LAW|Applicable\s+Law)(?:[.;:]\s*)(.*?)(?=\b\d+\.\s*[A-Z])',
-            r'(?:Governing\s+Law|GOVERNING\s+LAW)\s*[.\s]+((?:THIS|This|The|THE|Each|EACH)[^§]{20,}?)(?=(?:(?<!\bthis\s)(?<!\bof\s)(?:Section|SECTION))\s+[\d.]+[.\s]+[A-Z]|(?:ARTICLE\s+)|$)',
+            r'(?:Governing\s+Law|GOVERNING\s+LAW)\s*[.\s]+((?:THIS|This|The|THE|Each|EACH)[^Ãƒâ€šÃ‚Â§]{20,}?)(?=(?:(?<!\bthis\s)(?<!\bof\s)(?:Section|SECTION))\s+[\d.]+[.\s]+[A-Z]|(?:ARTICLE\s+)|$)',
         ]
 
         best_match = None
@@ -415,7 +577,8 @@ class FieldExtractor:
                 content = m.group(1).strip()
                 if len(content) < 40:
                     continue
-                if 'governed' not in content.lower() and 'law of' not in content.lower():
+                has_governance = re.search(r'governed|govern[s]?\s|laws?\s+of|English\s+Law|German\s+Law', content, re.IGNORECASE)
+                if not has_governance:
                     continue
                 if best_match is None or len(content) > len(best_match):
                     best_match = content
@@ -425,7 +588,7 @@ class FieldExtractor:
     def _find_bare_governing_clauses(self, text: str) -> Optional[str]:
         clauses = []
         for m in re.finditer(
-            r'((?:This|THE|The|Each|EACH)\s+(?:Indenture|Note|Security|Agreement|Supplement|Guarantee)'
+            r'((?:This|THE|The|Each|EACH)\s+(?:\w+[\s-]+)*(?:Indenture|Notes?|Securities|Security|Agreement|Supplement|Guarantee)'
             r'[^.]{0,200}?(?:shall be |be |is |are |will be )?'
             r'governed by[^.]{0,300}?\.)',
             text, re.IGNORECASE | re.DOTALL
@@ -436,15 +599,29 @@ class FieldExtractor:
             if not re.search(r'laws?\s+of|English\s+Law|German\s+Law', clause, re.IGNORECASE):
                 continue
             clauses.append(clause)
+
+        for m in re.finditer(
+            r'((?:The\s+)?laws?\s+of\s+[^.]{5,80}?shall\s+govern\s+'
+            r'(?:the\s+|this\s+)?(?:Indenture|Note|Security|Agreement|Supplement|Guarantee)[^.]{0,150}?\.)',
+            text, re.IGNORECASE | re.DOTALL
+        ):
+            clause = m.group(0).strip()
+            if any(fp in clause.lower() for fp in GOVERNING_LAW_FALSE_POSITIVES):
+                continue
+            clauses.append(clause)
+
         return ' '.join(clauses) if clauses else None
 
-    def _parse_governing_law_clauses(self, section_text: str) -> List[Dict[str, str]]:
-        results = []
-        sentences = re.split(r'(?<=[.])\s+', section_text)
+    def _parse_governing_law_from_section(self, section_text: str) -> List[Dict[str, str]]:
+        if not section_text:
+            return []
 
+        results = []
+
+        sentences = re.split(r'(?<=[.])\s+', section_text)
         governed_chunks, current_chunk = [], []
         for sent in sentences:
-            if re.search(r'governed\s+by|governing\s+law|laws?\s+of', sent, re.IGNORECASE):
+            if re.search(r'governed\s+by|shall\s+govern|laws?\s+of|English\s+Law|German\s+Law', sent, re.IGNORECASE):
                 if current_chunk:
                     governed_chunks.append(' '.join(current_chunk))
                 current_chunk = [sent]
@@ -462,41 +639,48 @@ class FieldExtractor:
                 continue
 
             except_match = re.search(
-                r'(.*?governed\s+by.*?laws?\s+of[^,;.]+?)(?:,?\s*except\s+(?:for\s+|that\s+)?)(.*?(?:shall\s+be\s+)?governed\s+by.*)',
+                r'(.*?(?:governed\s+by|shall\s+govern).*?laws?\s+of[^,;.]+?)(?:,?\s*except\s+(?:for\s+|that\s+)?)(.*?(?:(?:shall\s+be\s+)?governed\s+by|shall\s+govern).*)',
                 chunk, re.IGNORECASE | re.DOTALL
             )
             if except_match:
-                self._add_clause_result(results, except_match.group(1).strip(), chunk)
-                self._add_clause_result(results, except_match.group(2).strip(), chunk)
+                self._process_chunk(results, except_match.group(1).strip(), chunk)
+                self._process_chunk(results, except_match.group(2).strip(), chunk)
             else:
-                self._add_clause_result(results, chunk, chunk)
+                self._process_chunk(results, chunk, chunk)
 
         seen_locations = set()
         return [r for r in results if r['location'] not in seen_locations and not seen_locations.add(r['location'])]
 
-    def _add_clause_result(self, results: List[Dict], clause: str, full_text: str):
+    def _process_chunk(self, results: List[Dict], clause: str, full_text: str):
         location = self._extract_governing_jurisdiction(clause)
         if not location:
             return
         location = location.title() if location.isupper() else location
-        results.append({
-            'text': re.sub(r'\s+', ' ', full_text).strip()[:800],
-            'type': self._categorize_governing_law_type(clause),
-            'location': location,
-            'code': GOVERNING_LAW_MAPPING.get(location.lower(), ''),
-        })
+        full_text_clean = re.sub(r'\s+', ' ', full_text).strip()[:800]
+        code = GOVERNING_LAW_MAPPING.get(location.lower(), '')
+
+        types = self._categorize_governing_law_types(clause)
+
+        for gov_type in types:
+            results.append({
+                'text': full_text_clean,
+                'type': gov_type,
+                'location': location,
+                'code': code,
+            })
 
     def _extract_governing_jurisdiction(self, clause: str) -> Optional[str]:
+        _END = r'(?:\.|,|;|\s+(?:without|but|applicable|shall|will|that|and\s+the|\()|$)'
         patterns = [
-            (r'laws?\s+of\s+(?:the\s+)?Province\s+of\s+([\w\s]+?)(?:\s+and\s+the\s+(?:federal\s+)?laws|\.|,|;|$)', None),
-            (r'laws?\s+of\s+(?:the\s+)?Commonwealth\s+of\s+(\w[\w\s]*?)(?:\.|,|;|\s+(?:without|but|applicable)|$)', None),
+            (rf'laws?\s+of\s+(?:the\s+)?Province\s+of\s+([\w\s]+?)(?:\s+and\s+the\s+(?:federal\s+)?laws|{_END})', None),
+            (rf'laws?\s+of\s+(?:the\s+)?Commonwealth\s+of\s+(\w[\w\s]*?){_END}', None),
             (r'laws?\s+of\s+(?:the\s+)?Federal\s+Republic\s+of\s+(\w+)', None),
             (r'\bEnglish\s+Law\b', 'England'),
             (r'\bGerman\s+Law\b', 'Germany'),
-            (r'laws?\s+of\s+(?:the\s+)?(?:State\s+of\s+|state\s+of\s+)([\w\s]+?)(?:\.|,|;|\s+(?:without|but|applicable|\()|$)', None),
-            (r'internal\s+laws?\s+of\s+(?:the\s+)?(?:State\s+of\s+)?([\w\s]+?)(?:\.|,|;|\s+(?:without|but|applicable|\()|$)', None),
-            (r'\blaw\s+of\s+(?:the\s+)?(?:State\s+of\s+)([\w\s]+?)(?:\.|,|;|\s+(?:without|but|applicable|\()|$)', None),
-            (r'laws?\s+of\s+(?:the\s+)?((?!State|Commonwealth|Federal|Province|United\s+States)[A-Z][\w\s]*?)(?:\.|,|;|\s+(?:without|but|applicable|\()|$)', None),
+            (rf'laws?\s+of\s+(?:the\s+)?(?:State\s+of\s+|state\s+of\s+)([\w\s]+?){_END}', None),
+            (rf'internal\s+laws?\s+of\s+(?:the\s+)?(?:State\s+of\s+)?([\w\s]+?){_END}', None),
+            (rf'\blaw\s+of\s+(?:the\s+)?(?:State\s+of\s+)([\w\s]+?){_END}', None),
+            (rf'laws?\s+of\s+(?:the\s+)?((?!State|Commonwealth|Federal|Province|United\s+States)[A-Z][\w\s]*?){_END}', None),
         ]
 
         for pattern, fixed_name in patterns:
@@ -510,16 +694,37 @@ class FieldExtractor:
                     return name
         return None
 
-    def _categorize_governing_law_type(self, clause: str) -> str:
-        """Classify by keywords in the subject (before 'governed by')."""
-        subject = re.split(r'governed\s+by', clause, maxsplit=1, flags=re.IGNORECASE)[0].lower()
-        for category, kw_patterns in GOVERNING_LAW_TYPE_KEYWORDS.items():
-            for pattern in kw_patterns:
-                if re.search(pattern, subject):
-                    return category
-        return 'Terms and Conditions'
+    def _categorize_governing_law_types(self, clause: str) -> List[str]:
+        parts = re.split(r'governed\s+by|shall\s+govern', clause, maxsplit=1, flags=re.IGNORECASE)
+        subject = parts[0].lower() if parts else clause.lower()
 
-    # Coupon / Maturity / Issue Size 
+        types = []
+
+        for category, kw_patterns in GOVERNING_LAW_TYPE_KEYWORDS.items():
+            if category == 'Collateral':
+                for pattern in kw_patterns:
+                    if pattern == r'\bguarantee[s]?\b':
+                        continue
+                    if re.search(pattern, subject):
+                        types.append(category)
+                        break
+            else:
+                for pattern in kw_patterns:
+                    if re.search(pattern, subject):
+                        types.append(category)
+                        break
+
+        if not types:
+            types.append('Terms and Conditions')
+
+        if re.search(r'\bguarantee[s]?\b', subject):
+            if 'Terms and Conditions' not in types:
+                types.insert(0, 'Terms and Conditions')
+            if 'Collateral' not in types:
+                types.append('Collateral')
+
+        return types
+
     @staticmethod
     def parse_coupon_rate(security_desc: str) -> Optional[str]:
         if not security_desc:
@@ -559,23 +764,165 @@ class FieldExtractor:
     def extract_issue_size(self, text: str) -> Optional[str]:
         if not text:
             return None
+        # Tier 1: Known currency symbols/codes (high confidence, exact match)
+        _CUR_KNOWN = r'(?:U\.S\.\$|US\$|Cdn\$|\$|€|¥|£|C\$|A\$|HK\$|NZ\$|S\$|Mex\$|R\$|CAD|AUD|BRL|MXN|CHF|CNY|HKD|NZD|SGD|SEK|NOK|DKK|PLN|ZAR|₹|₩|kr|Rs\.?)'
+        # Tier 2: Generic fallback — any currency-like prefix:
+        #   [A-Z]{0,3}\$  → catches "NT$", "Cdn$", or bare "$"
+        #   unicode currency symbols (₫₿฿₪₱₨₵₡₣₲₴₺₼₽₾)
+        #   3-letter uppercase code before digits — BUT only if it doesn't look like
+        #   a common English word (THE, DUE, PER, FOR, ARE, NOT, etc.)
+        _COMMON_3 = r'(?!THE|DUE|PER|FOR|ARE|NOT|AND|BUT|ALL|ANY|HAS|HAD|ITS|MAY|OUR|OWN|SET|SUM|TAX|USE|WAS|YET)'
+        _CUR_GENERIC = rf'(?:[A-Z]{{0,3}}\$|[€¥£₹₩₫₿฿₪₱₨₵₡₣₲₴₺₼₽₾]|{_COMMON_3}[A-Z]{{3}}(?=\s*[\d,]))'
+        # Combined: try known first, fall back to generic
+        _CUR = rf'(?:{_CUR_KNOWN}|{_CUR_GENERIC})'
         patterns = [
-            r'aggregate\s+(?:initial\s+)?principal\s+amount\s+of\s+[\$¥€£]?\s*([\d,]+(?:\.\d+)?)',
-            r'[\$¥€£]\s*([\d,]+(?:\.\d+)?)\s+(?:aggregate\s+)?principal\s+amount',
-            r'principal\s+amount\s+(?:of\s+)?[\$¥€£]\s*([\d,]+(?:\.\d+)?)',
-            r'in\s+(?:an?\s+)?aggregate\s+(?:principal\s+)?amount\s+(?:of\s+|to\s+)?[\$¥€£]\s*([\d,]+(?:\.\d+)?)',
+            rf'aggregate\s+(?:initial\s+)?principal\s+amount\s+of\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
+            rf'{_CUR}\s*([\d,]+(?:\.\d+)?)\s+(?:aggregate\s+)?principal\s+amount',
+            rf'principal\s+amount\s+(?:of\s+)?{_CUR}\s*([\d,]+(?:\.\d+)?)',
+            rf'in\s+(?:an?\s+)?aggregate\s+(?:principal\s+)?amount\s+(?:of\s+|to\s+)?{_CUR}\s*([\d,]+(?:\.\d+)?)',
+            # Bridging: "aggregate principal amount of [words] shall be {CUR}{amount}"
+            # Uses [\s\S] instead of . to match across newlines in parsed HTML text
+            rf'aggregate\s+(?:initial\s+)?principal\s+amount\s+of\s+[\s\S]{{1,120}}(?:shall\s+be|is|equals?|of)\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
+            # Parenthesized: "aggregate principal amount of WRITTEN AMOUNT ({CUR}{amount})"
+            # Catches written-out amounts like "FIVE HUNDRED MILLION EURO (€500,000,000)"
+            rf'aggregate\s+(?:initial\s+)?principal\s+amount\s+[\s\S]{{1,80}}\({_CUR}\s*([\d,]+(?:\.\d+)?)\)',
+            rf'(?:limited\s+(?:\w+\s+){{0,2}}to|up\s+to)\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
+            rf'(?:not\s+to\s+exceed|not\s+exceeding)\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
         ]
-        for pattern in patterns:
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                amount = m.group(1).replace(',', '')
+        _NEG_CONTEXT = re.compile(
+            r'(?:at\s+least|not\s+less\s+than|in\s+excess\s+of|minimum\s+denomination|'
+            r'increments?\s+of|a\s+Holder\s+of|Holders?\s+of\s+at\s+least|'
+            r'in\s+(?:a\s+)?minimum|exceeds?|greater\s+than|'
+            r'quotations?\s+.{0,30}for|bid\s+.{0,20}for)',
+            re.IGNORECASE
+        )
+        # Broader negative context for covenant baskets (checked with wider window)
+        _NEG_COVENANT = re.compile(
+            r'Indebtedness',
+            re.IGNORECASE
+        )
+        _NEG_AFTER = re.compile(
+            r'\s+or\s+(?:less|more|such\s+lesser|greater)',
+            re.IGNORECASE
+        )
+
+        def _find_amounts(search_text):
+            amounts = []
+            for pat in patterns:
+                for m in re.finditer(pat, search_text, re.IGNORECASE):
+                    preceding = search_text[max(0, m.start() - 60):m.start()]
+                    if _NEG_CONTEXT.search(preceding):
+                        continue
+                    # Wider window for covenant basket detection
+                    preceding_wide = search_text[max(0, m.start() - 120):m.start()]
+                    if _NEG_COVENANT.search(preceding_wide):
+                        continue
+                    following = search_text[m.end():m.end() + 40]
+                    if _NEG_AFTER.search(following):
+                        continue
+                    raw = m.group(1).replace(',', '')
+                    try:
+                        val = float(raw)
+                        if val >= 1_000_000:
+                            amounts.append(val)
+                    except ValueError:
+                        continue
+            return amounts
+
+        # Prefer cover page (first 2000 chars) — take max (title page states total)
+        cover_amounts = _find_amounts(text[:2000])
+        if cover_amounts:
+            return f"{int(max(cover_amounts)):,}"
+
+        # Cover-page fallback: bare large amount near CUSIP/ISIN (note form title pages)
+        # Matches "€2,250,000,000  CUSIP:" or "$500,000,000  ISIN:" on cover
+        cover = text[:2000]
+        if re.search(r'(?:CUSIP|ISIN)', cover, re.IGNORECASE):
+            for m in re.finditer(rf'{_CUR}\s*([\d,]+(?:\.\d+)?)', cover, re.IGNORECASE):
+                raw = m.group(1).replace(',', '')
                 try:
-                    val = float(amount)
+                    val = float(raw)
+                except ValueError:
+                    continue
+                if val < 1_000_000:
+                    continue
+                preceding = cover[max(0, m.start() - 60):m.start()]
+                if _NEG_CONTEXT.search(preceding):
+                    continue
+                # Must be near a CUSIP/ISIN reference (within 200 chars)
+                nearby = cover[m.start():m.end() + 200]
+                if re.search(r'(?:CUSIP|ISIN)', nearby, re.IGNORECASE):
+                    return f"{int(val):,}"
+
+        # Fallback to full text — take first qualifying match (not max, to avoid
+        # grabbing combined aggregates in multi-security docs like AMGEN)
+        for pat in patterns:
+            for m in re.finditer(pat, text, re.IGNORECASE):
+                preceding = text[max(0, m.start() - 60):m.start()]
+                if _NEG_CONTEXT.search(preceding):
+                    continue
+                preceding_wide = text[max(0, m.start() - 120):m.start()]
+                if _NEG_COVENANT.search(preceding_wide):
+                    continue
+                following = text[m.end():m.end() + 40]
+                if _NEG_AFTER.search(following):
+                    continue
+                raw = m.group(1).replace(',', '')
+                try:
+                    val = float(raw)
                     if val >= 1_000_000:
                         return f"{int(val):,}"
                 except ValueError:
                     continue
         return None
+
+    def detect_base_indenture_reference(self, text: str) -> Optional[str]:
+        if not text:
+            return None
+
+        normalized = re.sub(r'\s+', ' ', text[:8000])
+
+        # Detect document type: supplemental indenture OR note form / global note
+        is_supplemental = bool(re.search(r'supplemental\s+indenture', normalized, re.IGNORECASE))
+        is_note_form = bool(re.search(
+            r'(?:THIS\s+(?:NOTE|CERTIFICATE|SECURITY)\s+IS\s+A\s+GLOBAL\s+(?:NOTE|SECURITY))|'
+            r'(?:UNLESS\s+THIS\s+CERTIFICATE\s+IS\s+PRESENTED)|'
+            r'(?:INDENTURE\s+HEREINAFTER\s+REFERRED\s+TO)|'
+            r'(?:Indenture\s+referred\s+to\s+on\s+the\s+reverse)',
+            normalized, re.IGNORECASE
+        ))
+
+        if not is_supplemental and not is_note_form:
+            return None
+
+        m = re.search(
+            r'(?:base|original|initial)\s+indenture["\s)]*,?\s*dated\s+(?:as\s+of\s+)?'
+            r'([A-Z][a-z]+\s+\d{1,2},?\s+\d{4})',
+            normalized, re.IGNORECASE
+        )
+        if m:
+            return f"Refers to Base Indenture dated {m.group(1)}"
+
+        # Match "under/pursuant to the/an Indenture, dated as of [date]"
+        m = re.search(
+            r'(?:under|pursuant\s+to)\s+(?:the|an)\s+indenture["\s)]*,?\s*dated\s+(?:as\s+of\s+)?'
+            r'([A-Z][a-z]+\s+\d{1,2},?\s+\d{4})',
+            normalized, re.IGNORECASE
+        )
+        if m:
+            return f"Refers to Indenture dated {m.group(1)}"
+
+        m = re.search(
+            r'(?<!supplemental\s)indenture["\s)]*,?\s*dated\s+(?:as\s+of\s+)?'
+            r'([A-Z][a-z]+\s+\d{1,2},?\s+\d{4})',
+            normalized, re.IGNORECASE
+        )
+        if m:
+            return f"Refers to Indenture dated {m.group(1)}"
+
+        if is_supplemental:
+            return "Supplemental indenture; base indenture reference not resolved"
+        return "Note form; base indenture reference not resolved"
 
 def find_mapping_file(root_dir: Path) -> Path:
     for path in [root_dir / "Mapping.xlsx",
@@ -627,42 +974,39 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
 
         stats['processed'] += 1
 
-        if sec := extractor.extract_securities(text):
-            row["Security Description"] = sec
-            stats['security'] += 1
-            if coupon := extractor.parse_coupon_rate(sec):
-                row["Coupon Rate"] = coupon
-                stats['coupon'] += 1
-            if maturity := extractor.parse_maturity_date(sec):
-                row["Maturity Date"] = maturity
-                stats['maturity'] += 1
+        # Skip WHEREAS preamble for security extraction — it lists historical
+        # securities from prior supplemental indentures, not the new issuance.
+        whereas_end = re.search(r'NOW,?\s*THEREFORE|WITNESSETH\s+that', text, re.IGNORECASE)
+        body_text = text[whereas_end.start():] if whereas_end else text
 
-        if not row.get("Maturity Date") or row.get("Maturity Date", "").strip().isdigit():
-            if full_maturity := extractor.extract_maturity_date_from_text(text, row.get("Security Description")):
-                row["Maturity Date"] = full_maturity
-                stats['maturity'] += 1
+        cover_sec = extractor.extract_securities(text[:1200])
+        if cover_sec:
+            sec_joined = cover_sec
+        else:
+            legacy_spans = extractor._find_legacy_table_spans(body_text)
+            sec_joined = extractor.extract_securities(body_text, exclude_spans=legacy_spans)
+            # If operative section had no securities, fall back to full text
+            if not sec_joined and whereas_end:
+                legacy_spans = extractor._find_legacy_table_spans(text)
+                sec_joined = extractor.extract_securities(text, exclude_spans=legacy_spans)
+        cusip_joined = extractor.extract_cusips(text)
+        isin_joined = extractor.extract_isins(text)
+        issue_size = extractor.extract_issue_size(text)
+        bd_text = extractor.extract_business_day_definition(text)
+        gov_laws = extractor.extract_governing_law(text)
 
-        if cusip := extractor.extract_cusips(text):
-            row["CUSIP"] = cusip
-            stats['cusip'] += 1
-
-        if isin := extractor.extract_isins(text):
-            row["ISIN"] = isin
-            stats['isin'] += 1
-
-        if issue_size := extractor.extract_issue_size(text):
-            row["Issue Size"] = issue_size
-            stats['issue_size'] += 1
-
-        if bd_text := extractor.extract_business_day_definition(text):
-            row["Text"] = bd_text
+        if bd_text:
             locations = extractor.extract_locations_from_definition(bd_text)
             codes = extractor.map_locations_to_codes(locations)
+            row["Text"] = bd_text
             row["Business Days - Standardized"] = "; ".join(locations) if locations else ""
             row["Mapping"] = "; ".join(codes) if codes else ""
             stats['bdays'] += 1
 
-        gov_laws = extractor.extract_governing_law(text)
+        if issue_size:
+            row["Issue Size"] = issue_size
+            stats['issue_size'] += 1
+
         if gov_laws:
             row["Governing Law Text"] = gov_laws[0]['text']
             row["Governing Law Type"] = gov_laws[0]['type']
@@ -670,13 +1014,70 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             row["Governing Law Code"] = gov_laws[0]['code']
             stats['gov_law'] += 1
 
+        if not bd_text or not gov_laws:
+            base_ref = extractor.detect_base_indenture_reference(text)
+            if base_ref:
+                row["Base Indenture Reference"] = base_ref
+
+        sec_list = [s.strip() for s in sec_joined.split("; ")] if sec_joined else []
+        cusip_list = [c.strip() for c in cusip_joined.split("; ")] if cusip_joined else []
+        isin_list = [i.strip() for i in isin_joined.split("; ")] if isin_joined else []
+
+        if len(sec_list) <= 1:
+            if sec_joined:
+                row["Security Description"] = sec_joined
+                stats['security'] += 1
+                if coupon := extractor.parse_coupon_rate(sec_joined):
+                    row["Coupon Rate"] = coupon
+                    stats['coupon'] += 1
+                if maturity := extractor.parse_maturity_date(sec_joined):
+                    row["Maturity Date"] = maturity
+                    stats['maturity'] += 1
+            if cusip_joined:
+                row["CUSIP"] = cusip_joined
+                stats['cusip'] += 1
+            if isin_joined:
+                row["ISIN"] = isin_joined
+                stats['isin'] += 1
+        else:
+            stats['security'] += 1
+            if cusip_joined:
+                stats['cusip'] += 1
+            if isin_joined:
+                stats['isin'] += 1
+
+            row["Security Description"] = sec_list[0]
+            row["CUSIP"] = cusip_list[0] if cusip_list else ""
+            row["ISIN"] = isin_list[0] if isin_list else ""
+            if coupon := extractor.parse_coupon_rate(sec_list[0]):
+                row["Coupon Rate"] = coupon
+                stats['coupon'] += 1
+            if maturity := extractor.parse_maturity_date(sec_list[0]):
+                row["Maturity Date"] = maturity
+                stats['maturity'] += 1
+
+            for idx in range(1, len(sec_list)):
+                sec_row = dict(row)
+                sec_row["Security Description"] = sec_list[idx]
+                sec_row["CUSIP"] = cusip_list[idx] if idx < len(cusip_list) else ""
+                sec_row["ISIN"] = isin_list[idx] if idx < len(isin_list) else ""
+                sec_row["Coupon Rate"] = extractor.parse_coupon_rate(sec_list[idx]) or ""
+                sec_row["Maturity Date"] = extractor.parse_maturity_date(sec_list[idx]) or ""
+                extra_rows.append(sec_row)
+
+        if not row.get("Maturity Date") or row.get("Maturity Date", "").strip().isdigit():
+            if full_maturity := extractor.extract_maturity_date_from_text(text, row.get("Security Description")):
+                row["Maturity Date"] = full_maturity
+                stats['maturity'] += 1
+
+        if gov_laws and len(gov_laws) > 1:
             for gl in gov_laws[1:]:
-                extra_row = dict(row)
-                extra_row["Governing Law Text"] = gl['text']
-                extra_row["Governing Law Type"] = gl['type']
-                extra_row["Governing Law"] = gl['location']
-                extra_row["Governing Law Code"] = gl['code']
-                extra_rows.append(extra_row)
+                gl_row = dict(row)
+                gl_row["Governing Law Text"] = gl['text']
+                gl_row["Governing Law Type"] = gl['type']
+                gl_row["Governing Law"] = gl['location']
+                gl_row["Governing Law Code"] = gl['code']
+                extra_rows.append(gl_row)
 
     rows.extend(extra_rows)
 

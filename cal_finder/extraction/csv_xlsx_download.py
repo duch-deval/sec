@@ -29,8 +29,7 @@ SESSION.headers.update({
 })
 
 EXPORT_COLUMNS = [
-    "Company ", "File Date", "File Type", "File Link ",
-    "Description of Exhibit", "Exhibit",
+    "Company ", "File Date", "File Type", "File Link ", "Exhibit",
     "Security Description", "CUSIP", "ISIN", "Text",
     "Business Days - Standardized", "Mapping",
 ]
@@ -170,7 +169,6 @@ def run(input_path: Path, output_dir: Path):
             "File Date": rec["file_date"],
             "File Type": rec["file_type"],
             "File Link ": rec["file_link"],
-            "Description of Exhibit": "",
             "Exhibit": rec["exhibit"],
             "Security Description": "",
             "CUSIP": "",

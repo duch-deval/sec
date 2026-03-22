@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import csv
+import html as html_mod
 import re
 import shutil
 import logging
@@ -12,6 +13,9 @@ REJECT_PATTERNS = [
     (r"COMMON\s+STOCK\s+PURCHASE\s+WARRANT", "warrant", "Common stock purchase warrant"),
     (r"PRE-?FUNDED\s+WARRANT", "warrant", "Pre-funded warrant"),
     (r"WARRANT\s+TO\s+PURCHASE", "warrant", "Warrant to purchase"),
+    (r"WARRANT\s+AGREEMENT", "warrant", "Warrant agreement"),
+    (r"ANNOUNCES?\s+(?:CASH\s+)?TENDER\s+OFFER", "press_release", "Tender offer press release"),
+    (r"CASH\s+TENDER\s+OFFER", "press_release", "Cash tender offer"),
     (r"STRATEGIC\s+ADVISORY\s+WARRANT", "warrant", "Strategic advisory warrant"),
     (r"THIS\s+WARRANT\s+CERTIFIES", "warrant", "Warrant certificate"),
     (r"AMENDMENT\s+TO\s+.*WARRANT", "warrant_amendment", "Warrant amendment"),
@@ -26,6 +30,29 @@ REJECT_PATTERNS = [
     (r"SHAREHOLDER\s+RIGHTS\s+AGREEMENT", "rights_agreement", "Shareholder rights agreement"),
     (r"CERTIFICATE\s+OF\s+DESIGNATION.*PREFERRED", "preferred_stock", "Preferred stock certificate"),
     (r"CERTIFICATE\s+OF\s+DESIGNATIONS.*PREFERRED", "preferred_stock", "Preferred stock certificate"),
+    (r"VOLUNTARY\s+ANNOUNCEMENT", "stock_exchange_announcement", "Voluntary announcement"),
+    (r"STOCK\s+EXCHANGE\s+OF\s+HONG\s+KONG", "stock_exchange_announcement", "HK stock exchange announcement"),
+    (r"HONG\s+KONG\s+EXCHANGES\s+AND\s+CLEARING", "stock_exchange_announcement", "HK exchanges announcement"),
+    (r"PURCHASE\s+OF\s+SHARES\s+ON\s+MARKET", "share_purchase_announcement", "Share purchase announcement"),
+    (r"TRUST\s+AND\s+SERVICING\s+AGREEMENT", "cmbs_tsa", "CMBS trust & servicing agreement"),
+    (r"AUTO\s+RECEIVABLES?\b.{0,30}TRUST", "asset_backed", "Auto receivables trust"),
+    (r"AUTO\s+(?:LOAN|LEASE)\s+(?:RECEIVABLES?|TRUST)", "asset_backed", "Auto loan/lease trust"),
+    (r"ASSET[- ]BACKED\s+(?:NOTES?|SECURITIES|CERTIFICATES)", "asset_backed", "Asset-backed securities"),
+    (r"RECEIVABLES?\s+(?:LLC|TRUST|CORP).{0,30}(?:AS\s+)?ISSU(?:ER|ING)", "asset_backed", "Receivables issuing entity"),
+    (r"MORTGAGE[- ]BACKED", "asset_backed", "Mortgage-backed securities"),
+    (r"COLLATERALIZED\s+LOAN\s+OBLIGATION", "asset_backed", "CLO"),
+    (r"MEDIUM[- ]TERM\s+NOTE", "medium_term_note", "Medium-term note master form"),
+    (r"AMENDMENT\s+TO\s+INVESTMENT\s+AGREEMENT", "investment_agreement", "Investment agreement amendment"),
+    (r"REGISTRATION\s+RIGHTS\s+AGREEMENT", "rights_agreement", "Registration rights agreement"),
+    (r"APPENDIX\s+3[YZ]", "asx_disclosure", "ASX director interest/substantial holder notice"),
+    (r"CHANGE\s+OF\s+DIRECTOR", "asx_disclosure", "ASX change of director notice"),
+    (r"THIS\s+(?:NOTE|CERTIFICATE|SECURITY)\s+IS\s+A\s+GLOBAL\s+SECURITY", "global_security_form", "Global security certificate form"),
+]
+
+# Patterns that should only match in the document title area (first 500 chars)
+TITLE_REJECT_PATTERNS = [
+    (r"OFFICERS?['.\u2019]?\s*CERTIFICATE", "officers_cert", "Officers certificate"),
+    (r"COMPANY\s+ORDER", "company_order", "Company order document"),
 ]
 
 ACCEPT_PATTERNS = [
@@ -62,6 +89,7 @@ EXPORT_COLUMNS = ["Company ", "File Date", "File Type", "File Link ", "Descripti
 def extract_text_preview(file_path: Path, max_chars: int = 8000) -> str:
     try:
         text = file_path.read_bytes().decode("utf-8", errors="replace")
+        text = html_mod.unescape(text)
         return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:max_chars]
     except Exception:
         return ""
@@ -72,6 +100,38 @@ def check_reject_patterns(text: str) -> Optional[Tuple[str, str]]:
     for pattern, category, description in REJECT_PATTERNS:
         if re.search(pattern, text_upper):
             return (category, description)
+    # Title-area patterns: only check the first 500 chars
+    title_area = text_upper[:500]
+    for pattern, category, description in TITLE_REJECT_PATTERNS:
+        if re.search(pattern, title_area):
+            return (category, description)
+    return None
+
+
+def check_abs_fingerprint(text: str) -> Optional[Tuple[str, str]]:
+    """Detect asset-backed securities by structural co-occurrence rather than
+    individual title patterns. Catches ABS variants (auto lease trusts, credit
+    card trusts, student loan ABS, etc.) that slip through enumerated
+    REJECT_PATTERNS. Requires 2+ co-occurring signals to avoid false positives."""
+    title_area = text[:3000].upper()
+
+    signals = []
+    if re.search(r'\bDEPOSITOR\b', title_area):
+        signals.append('Depositor')
+    if re.search(r'\bSERVICER\b', title_area):
+        signals.append('Servicer')
+    if re.search(r'\bSECURITIZ', title_area):
+        signals.append('Securitization')
+    if re.search(r'\bASSET[- ]BACKED\b', title_area):
+        signals.append('Asset-Backed')
+    if re.search(r'\b(?:RECEIVABLES?|LEASING)\s+(?:LLC|TRUST|CORP)', title_area):
+        signals.append('Receivables/Leasing entity')
+    if re.search(r'\bISSUER\s+TRUST\b', title_area):
+        signals.append('Issuer Trust')
+
+    if len(signals) >= 2:
+        return ("asset_backed_structural",
+                f"Structural ABS fingerprint: {', '.join(signals)}")
     return None
 
 
@@ -99,6 +159,10 @@ def classify_document(file_path: Path) -> Dict:
         return {**base, "classification": "rejected", "confidence": "high", "reject_category": reject_match[0],
                 "reject_reason": f"Hard reject: {reject_match[1]}", "accept_score": 0, "trustee_found": False, "accept_matches": []}
 
+    if abs_match := check_abs_fingerprint(text):
+        return {**base, "classification": "rejected", "confidence": "high", "reject_category": abs_match[0],
+                "reject_reason": f"Hard reject: {abs_match[1]}", "accept_score": 0, "trustee_found": False, "accept_matches": []}
+
     score, trustee_found, matches = calculate_accept_score(text)
 
     if not trustee_found and TRUSTEE_REQUIRED:
@@ -119,6 +183,17 @@ def load_classification_metadata(csv_path: Path) -> Dict[str, Dict]:
         return {}
     with open(csv_path, "r", encoding="utf-8") as f:
         return {row.get("doc_name", ""): row for row in csv.DictReader(f) if row.get("doc_name")}
+
+
+def _resolve_metadata(filename: str, metadata: Dict[str, Dict]) -> Dict:
+    if meta := metadata.get(filename):
+        return meta
+    m = re.match(r'^(.+?)_(\d+)(\.(?:htm|html))$', filename, re.IGNORECASE)
+    if m:
+        original = m.group(1) + m.group(3)
+        if meta := metadata.get(original):
+            return meta
+    return {}
 
 
 def clean_company_name(company: str) -> str:
@@ -165,7 +240,7 @@ def run_pipeline(root_dir: Path, verbose: bool = False) -> bool:
                 pass
             stats["rejected"] += 1
         else:
-            meta = metadata.get(file_path.name, {})
+            meta = _resolve_metadata(file_path.name, metadata)
             candidates.append({
                 "Company ": clean_company_name(meta.get("company", "")),
                 "File Date": meta.get("filed", ""), "File Type": meta.get("form", ""),
