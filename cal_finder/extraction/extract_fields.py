@@ -823,7 +823,7 @@ class FieldExtractor:
                     raw = m.group(1).replace(',', '')
                     try:
                         val = float(raw)
-                        if val >= 1_000_000:
+                        if val > 0:
                             amounts.append(val)
                     except ValueError:
                         continue
@@ -870,7 +870,7 @@ class FieldExtractor:
                 raw = m.group(1).replace(',', '')
                 try:
                     val = float(raw)
-                    if val >= 1_000_000:
+                    if val > 0:
                         return f"{int(val):,}"
                 except ValueError:
                     continue
