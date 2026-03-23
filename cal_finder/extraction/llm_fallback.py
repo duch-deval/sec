@@ -10,11 +10,15 @@ from .models import IssueSizeExtraction, MaturityDateExtraction, BDReferenceExtr
 
 logger = logging.getLogger(__name__)
 
+def _llm_enabled() -> bool:
+    import os
+    return os.environ.get("LLM_FALLBACK_ENABLED", "true").lower() == "true" 
+
 # Snippet max length — never send full documents to LLM
 MAX_SNIPPET_CHARS = 1500
 
 # Model used for prototyping — swap to NuExtract in Week 8
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
 
 def _load_prompt(field_name: str) -> str:
@@ -40,6 +44,8 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
     Only called when regex returns empty.
     """
     snippet = snippet[:MAX_SNIPPET_CHARS]
+    if not _llm_enabled():
+        return None
     try:
         prompt = _load_prompt("issue_size")
         client = _make_client()
@@ -67,6 +73,8 @@ def extract_maturity_date(snippet: str, model: str = DEFAULT_MODEL) -> Optional[
     Only called when regex returns a year-only value or empty.
     """
     snippet = snippet[:MAX_SNIPPET_CHARS]
+    if not _llm_enabled():
+        return None
     try:
         prompt = _load_prompt("maturity_date")
         client = _make_client()
@@ -94,6 +102,8 @@ def extract_bd_by_reference(snippet: str, model: str = DEFAULT_MODEL) -> Optiona
     Only called when BD definition defers to 'Legal Holiday' or 'Place of Payment'.
     """
     snippet = snippet[:MAX_SNIPPET_CHARS]
+    if not _llm_enabled():
+        return None
     try:
         prompt = _load_prompt("payment_calendar")
         client = _make_client()
