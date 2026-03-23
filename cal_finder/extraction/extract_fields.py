@@ -1008,7 +1008,7 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             row["Mapping"] = "; ".join(codes) if codes else ""
             stats['bdays'] += 1
         elif not row.get("Base Indenture Reference"):
-            llm_result = extract_bd_by_reference(text[:1500])
+            llm_result = extract_bd_by_reference(bd_text)
             if llm_result:
                 locations = llm_result.locations
                 codes = extractor.map_locations_to_codes(locations)

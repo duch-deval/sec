@@ -42,6 +42,21 @@ Output: {"locations": ["New York", "U.S. Government Securities Business Day"], "
 Input: "Business Day means any day that is not a Legal Holiday or a Saturday or Sunday..."
 Output: null
 
+## Legal Holiday Resolution
+
+Some documents define Business Day as "any day which is not a Legal Holiday" without
+naming cities directly. In these cases, look for a separate "Legal Holiday" definition
+elsewhere in the same text snippet that names specific cities or jurisdictions.
+
+Example pattern:
+  "Business Day" means, any day which is not a Legal Holiday.
+  "Legal Holiday" means a Saturday, Sunday or other day on which commercial banks
+  in New York City, New York, or London, United Kingdom are closed.
+→ Extract: {"locations": ["New York", "London"], "raw_match": "New York City, New York, or London, United Kingdom"}
+
+If the Legal Holiday definition is not present in the snippet, return null.
+Do NOT invent city names that are not explicitly stated in the text.
+
 ## Edge Cases
 - Fort Worth, Houston, Chicago — valid US cities, return as-is
 - "banking institutions in New York or at a place of payment" — return "New York" only
