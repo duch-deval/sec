@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(Path(__file__).parents[2] / '.env')
 
 from bs4 import BeautifulSoup
 import openpyxl
