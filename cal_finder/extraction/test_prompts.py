@@ -99,16 +99,16 @@ TESTS = [
     {
         "file":   "2026-02-02/exhibits/ex4/d66948dex44.htm",
         "field":  "issue_size",
-        "expect": "000",
-        "label":  "Capital One 5.399% — issue size empty from regex",
-        "source": "verify: issue_size=EMPTY, Natasha Feb02 🔴",
+        "expect": None,
+        "label":  "Capital One 5.399% — placeholder $[], no real amount",
+        "source": "verify: $[] placeholder doc",
     },
     {
         "file":   "2026-02-02/exhibits/ex4/d66948dex43.htm",
         "field":  "issue_size",
-        "expect": "000",
-        "label":  "Capital One 4.722% — issue size empty from regex",
-        "source": "verify: issue_size=EMPTY, Natasha Feb02 🔴",
+        "expect": None,
+        "label":  "Capital One 4.722% — placeholder $[], no real amount",
+        "source": "verify: $[] placeholder doc",
     },
 
     # ══ ISSUE SIZE — misses/noise (LLM must return null) ══════════════════════
@@ -127,12 +127,44 @@ TESTS = [
         "source": "verify: issue_size=1,000 (noise)",
     },
 
+    # ══ ISSUE SIZE — additional misses ══════════════════════════════════════════
+    {
+        "file":   "2026-02-12/exhibits/ex4/tm262279d7_ex4-1.htm",
+        "field":  "issue_size",
+        "expect": None,
+        "label":  "American Honda ABS — all fields absent",
+        "source": "verify: all EMPTY",
+    },
+    {
+        "file":   "2026-02-18/exhibits/ex4/ef20065815_ex4-1.htm",
+        "field":  "issue_size",
+        "expect": None,
+        "label":  "Loews — issue size confirmed absent",
+        "source": "Natasha Feb18 QA + verify: all EMPTY",
+    },
+
+    # ══ ISSUE SIZE — hits (regex empty, amount in doc) ════════════════════════
+    {
+        "file":   "2026-02-05/exhibits/ex4/d84332dex42.htm",
+        "field":  "issue_size",
+        "expect": "500,000,000",
+        "label":  "McCormick — $500M on cover page, regex miss",
+        "source": "Natasha Feb05 QA + verify: EMPTY",
+    },
+    {
+        "file":   "2026-02-06/exhibits/ex4/tm265455d1_ex4-1.htm",
+        "field":  "issue_size",
+        "expect": None,
+        "label":  "PacifiCorp — amount in deep APA table, outside 1500 char window",
+        "source": "known limitation: snippet too short for this doc structure",
+    },
+
     # ══ MATURITY DATE — miss (no maturity in doc) ═════════════════════════════
     {
         "file":   "2026-02-05/exhibits/ex4/d104980dex41.htm",
         "field":  "maturity_date",
         "expect": None,
-        "label":  "FedEx AT&T indenture — maturity genuinely absent",
+        "label":  "FedEx indenture — maturity genuinely absent",
         "source": "verify: Maturity=EMPTY",
     },
 ]

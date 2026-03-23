@@ -41,6 +41,14 @@ Output: null
 Input: "...shall not permit Indebtedness to exceed $500,000,000 at any time..."
 Output: null
 
+## Critical Rejection Rules
+
+ALWAYS return null if:
+- The amount field contains a placeholder like `$[ ]`, `$[__]`, `[ ]`, or any bracket placeholder
+- The amount appears to be a minimum denomination (e.g. "$1,000", "$2,000") rather than a total offering size
+- The text is a security description or note title, not a dollar amount
+- No numeric dollar amount can be identified in the text
+
 ## Edge Cases
 - "1,125,470,000" with no currency symbol — assume USD if document is SEC US filing
 - Multi-tranche: if cover page shows total, use total; if per-tranche, extract per-tranche amount
