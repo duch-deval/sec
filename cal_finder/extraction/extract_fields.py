@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup
 import openpyxl
 
+from .llm_fallback import extract_issue_size, extract_maturity_date, extract_bd_by_reference
+
 logger = logging.getLogger(__name__)
 
 
@@ -1002,8 +1004,29 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             row["Business Days - Standardized"] = "; ".join(locations) if locations else ""
             row["Mapping"] = "; ".join(codes) if codes else ""
             stats['bdays'] += 1
+        elif not row.get("Base Indenture Reference"):
+            llm_result = extract_bd_by_reference(text[:1500])
+            if llm_result:
+                locations = llm_result.locations
+                codes = extractor.map_locations_to_codes(locations)
+                row["Text"] = llm_result.raw_match
+                row["Business Days - Standardized"] = "; ".join(locations)
+                row["Mapping"] = "; ".join(codes) if codes else ""
+                row["_llm_used"] = True
+                row["_llm_field"] = "bd_reference"
+                row["_llm_raw_match"] = llm_result.raw_match
+                stats['bdays'] += 1
 
-        if issue_size:
+        if not issue_size:
+            llm_result = extract_issue_size(text)
+            if llm_result:
+                issue_size = f"{int(llm_result.amount):,}"
+                row["Issue Size"] = issue_size
+                row["_llm_used"] = True
+                row["_llm_field"] = "issue_size"
+                row["_llm_raw_match"] = llm_result.raw_match
+                stats['issue_size'] += 1
+        else:
             row["Issue Size"] = issue_size
             stats['issue_size'] += 1
 
@@ -1069,6 +1092,14 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             if full_maturity := extractor.extract_maturity_date_from_text(text, row.get("Security Description")):
                 row["Maturity Date"] = full_maturity
                 stats['maturity'] += 1
+            else:
+                llm_result = extract_maturity_date(text[:1500])
+                if llm_result:
+                    row["Maturity Date"] = llm_result.date_str
+                    row["_llm_used"] = True
+                    row["_llm_field"] = "maturity_date"
+                    row["_llm_raw_match"] = llm_result.raw_match
+                    stats['maturity'] += 1
 
         if gov_laws and len(gov_laws) > 1:
             for gl in gov_laws[1:]:
@@ -1086,7 +1117,53 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
         writer.writeheader()
         writer.writerows(rows)
 
+    _write_to_supabase(rows)
+
     logger.info("Extraction: %d docs | Sec: %d | CUSIP: %d | ISIN: %d | BDays: %d | GovLaw: %d | Coupon: %d | Maturity: %d | IssueSize: %d",
                 stats['processed'], stats['security'], stats['cusip'], stats['isin'], stats['bdays'],
                 stats['gov_law'], stats['coupon'], stats['maturity'], stats['issue_size'])
     return True
+
+def _write_to_supabase(rows: list) -> None:
+    """Write extraction rows to bloomberg.extractions. Fails silently — CSV is the primary output."""
+    import os
+    from supabase import create_client
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    if not url or not key:
+        logger.warning("SUPABASE_URL or SUPABASE_KEY not set — skipping Supabase write")
+        return
+    try:
+        client = create_client(url, key)
+        records = []
+        for row in rows:
+            records.append({
+                "file_name":          row.get("File Link ", ""),
+                "issuer":             row.get("Company ", ""),
+                "file_date":          row.get("File Date") or None,
+                "file_type":          row.get("File Type", ""),
+                "exhibit":            row.get("Exhibit", ""),
+                "file_link":          row.get("File Link ", ""),
+                "security_desc":      row.get("Security Description", ""),
+                "cusip":              row.get("CUSIP", ""),
+                "isin":               row.get("ISIN", ""),
+                "coupon_rate":        row.get("Coupon Rate", ""),
+                "issue_size":         row.get("Issue Size", ""),
+                "maturity_date":      row.get("Maturity Date", ""),
+                "bd_text":            row.get("Text", ""),
+                "bd_locations":       row.get("Business Days - Standardized", ""),
+                "bd_codes":           row.get("Mapping", ""),
+                "gov_law_text":       row.get("Governing Law Text", ""),
+                "gov_law_type":       row.get("Governing Law Type", ""),
+                "gov_law":            row.get("Governing Law", ""),
+                "gov_law_code":       row.get("Governing Law Code", ""),
+                "base_indenture_ref": row.get("Base Indenture Reference", ""),
+                "review_required":    bool(row.get("_llm_used")),
+                "llm_used":           bool(row.get("_llm_used")),
+                "llm_field":          row.get("_llm_field") or None,
+                "llm_raw_match":      row.get("_llm_raw_match") or None,
+            })
+        client.schema("bloomberg").table("extractions").insert(records).execute()
+        logger.info("Supabase write: %d rows inserted", len(records))
+    except Exception as e:
+        logger.warning("Supabase write failed (non-fatal): %s", e)
