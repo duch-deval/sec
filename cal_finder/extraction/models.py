@@ -67,8 +67,14 @@ class MaturityDateExtraction(BaseModel):
             raise ValueError("date_str looks like a coupon rate, not a maturity date")
         # raw_match must contain a month name or maturity-related keyword
         months = "January|February|March|April|May|June|July|August|September|October|November|December"
-        if not re.search(months, self.raw_match, re.IGNORECASE) and not re.search(r"matur|due and payable|payable on", self.raw_match, re.IGNORECASE):
+        if not re.search(months, self.raw_match, re.IGNORECASE) and not re.search(r"matur|\bdue\b|due and payable|payable on", self.raw_match, re.IGNORECASE):
             raise ValueError("raw_match does not contain a recognizable date reference")
+        if re.search(r"\bdue\b", self.raw_match, re.IGNORECASE) and not re.search(months, self.raw_match, re.IGNORECASE) and re.fullmatch(r"20\d{2}", self.date_str.strip()):
+            raise ValueError("raw_match has due+year only — no month, not a precise maturity date")
+        # reject security descriptions masquerading as maturity dates (e.g. "4.400% Notes due 2031")
+        # only applies when date_str is year-only — full dates with month names are fine
+        if re.search(r"\d+\.\d+%", self.raw_match) and not re.search(months, self.raw_match, re.IGNORECASE) and re.fullmatch(r"20\d{2}", self.date_str.strip()):
+            raise ValueError("raw_match looks like a security description, not a maturity date")
         return self
 
     def verify_raw_match(self, snippet: str) -> bool:

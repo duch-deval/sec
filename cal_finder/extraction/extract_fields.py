@@ -756,14 +756,15 @@ class FieldExtractor:
         if not text:
             return None
         patterns = [
-            rf'(?:Stated\s+)?Maturity\s+Date["\s:]*(?:is\s+|shall\s+be\s+|means?\s+)?({_MONTH}\s+\d{{1,2}},?\s+20\d{{2}})',
-            rf'matur(?:ing|e|es)\s+(?:on\s+)?({_MONTH}\s+\d{{1,2}},?\s+20\d{{2}})',
-            rf'\bdue\s+({_MONTH}\s+\d{{1,2}},?\s+20\d{{2}})',
+            rf'(?:Stated\s+)?Maturity\s+Date["\s:]*(?:is\s+|shall\s+be\s+|means?\s+)?({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
+            rf'matur(?:ing|e|es)\s+(?:on\s+)?({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
+            rf'\bdue\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
+            rf'\bon\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})\s*\(',
         ]
         for pattern in patterns:
             m = re.search(pattern, text, re.IGNORECASE)
             if m:
-                return m.group(1)
+                return re.sub(r'&nbsp;', ' ', m.group(1)).strip()
         return None
 
     def extract_issue_size(self, text: str) -> Optional[str]:
@@ -1095,8 +1096,18 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             if full_maturity := extractor.extract_maturity_date_from_text(text, row.get("Security Description")):
                 row["Maturity Date"] = full_maturity
                 stats['maturity'] += 1
-            else:
-                llm_result = extract_maturity_date(text[:1500])
+            elif row.get("Maturity Date", "").strip().isdigit():
+                _yr = row["Maturity Date"].strip()
+                _pos = text.find(_yr)
+                # Use a window around the first year hit in body text, not sec desc
+                # Skip hits that only appear in the first 200 chars (cover/title area)
+                _search_start = max(200, _pos + len(_yr)) if _pos != -1 else 200
+                _body_pos = text.find(_yr, _search_start)
+                if _body_pos == -1:
+                    llm_result = None  # year only in title/desc, no body hit
+                else:
+                    _snip = text[max(0, _body_pos - 400): _body_pos + 400]
+                    llm_result = extract_maturity_date(_snip)
                 if llm_result:
                     row["Maturity Date"] = llm_result.date_str
                     row["_llm_used"] = True

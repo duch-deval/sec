@@ -164,8 +164,8 @@ TESTS = [
         "file":   "2026-02-05/exhibits/ex4/d104980dex41.htm",
         "field":  "maturity_date",
         "expect": None,
-        "label":  "FedEx indenture — maturity genuinely absent",
-        "source": "verify: Maturity=EMPTY",
+        "label":  "AT&T indenture — known miss: HTML parser strips nbsp before regex",
+        "source": "known limitation: April 30 2031 exists at pos 3848 but nbsp stripped",
     },
 ]
 

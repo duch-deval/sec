@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import time
 import instructor
 from litellm import completion
 
@@ -43,6 +44,7 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
     LLM fallback for issue size. Returns None on failure or raw_match mismatch.
     Only called when regex returns empty.
     """
+    time.sleep(2)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     if not _llm_enabled():
         return None
@@ -72,6 +74,7 @@ def extract_maturity_date(snippet: str, model: str = DEFAULT_MODEL) -> Optional[
     LLM fallback for maturity date. Returns None on failure or raw_match mismatch.
     Only called when regex returns a year-only value or empty.
     """
+    time.sleep(2)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     if not _llm_enabled():
         return None
@@ -92,6 +95,15 @@ def extract_maturity_date(snippet: str, model: str = DEFAULT_MODEL) -> Optional[
             return None
         return result
     except Exception as e:
+        if "does not support multiple tool calls" in str(e):
+            try:
+                import json as _json
+                _calls = e.__context__.choices[0].message.tool_calls
+                result = MaturityDateExtraction(**_json.loads(_calls[0].function.arguments))
+                if result.verify_raw_match(snippet):
+                    return result
+            except Exception:
+                pass
         logger.warning("Maturity date LLM fallback failed: %s", e)
         return None
 
@@ -101,6 +113,7 @@ def extract_bd_by_reference(snippet: str, model: str = DEFAULT_MODEL) -> Optiona
     LLM fallback for BD-by-reference. Returns None on failure or raw_match mismatch.
     Only called when BD definition defers to 'Legal Holiday' or 'Place of Payment'.
     """
+    time.sleep(2)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     if not _llm_enabled():
         return None
