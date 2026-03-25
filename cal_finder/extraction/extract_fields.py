@@ -759,7 +759,8 @@ class FieldExtractor:
             rf'(?:Stated\s+)?Maturity\s+Date["\s:]*(?:is\s+|shall\s+be\s+|means?\s+)?({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
             rf'matur(?:ing|e|es)\s+(?:on\s+)?({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
             rf'\bdue\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
-            rf'\bon\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})\s*\(',
+            rf'(?:Maturity\s+Date|mature[sd]?)\b[^.\n]{{0,200}}?\bon\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})\s*\(',
+            rf'principal\b[^.\n]{{0,80}}\bpayable\s+on\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})\b',
         ]
         for pattern in patterns:
             m = re.search(pattern, text, re.IGNORECASE)
@@ -1098,11 +1099,8 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
                 stats['maturity'] += 1
             elif row.get("Maturity Date", "").strip().isdigit():
                 _yr = row["Maturity Date"].strip()
-                _pos = text.find(_yr)
-                # Use a window around the first year hit in body text, not sec desc
-                # Skip hits that only appear in the first 200 chars (cover/title area)
-                _search_start = max(200, _pos + len(_yr)) if _pos != -1 else 200
-                _body_pos = text.find(_yr, _search_start)
+                # Skip title area (first 200 chars), find first body hit directly
+                _body_pos = text.find(_yr, 200)
                 if _body_pos == -1:
                     llm_result = None  # year only in title/desc, no body hit
                 else:
