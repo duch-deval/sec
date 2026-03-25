@@ -1126,6 +1126,28 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
 
     rows.extend(extra_rows)
 
+    # Post-processing: null out issue_size for master indentures
+    # Rule: if a single file generates >10 rows with identical issue_size,
+    # the amount is a shared trust balance, not an individual series issue size
+    from collections import Counter
+    file_issue_counts = Counter(
+        (r.get("File Link", ""), r.get("Issue Size", ""))
+        for r in rows
+        if r.get("Issue Size", "")
+    )
+    master_indenture_keys = {
+        (file, size) for (file, size), count in file_issue_counts.items()
+        if count > 10
+    }
+    if master_indenture_keys:
+        for r in rows:
+            key = (r.get("File Link", ""), r.get("Issue Size", ""))
+            if key in master_indenture_keys:
+                r["Issue Size"] = ""
+                r["_llm_used"] = False
+                r["_llm_field"] = ""
+                r["_llm_raw_match"] = ""
+
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
         writer.writeheader()
