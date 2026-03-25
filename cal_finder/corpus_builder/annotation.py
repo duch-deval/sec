@@ -44,7 +44,12 @@ REJECT_PATTERNS = [
     (r"MEDIUM[- ]TERM\s+NOTE", "medium_term_note", "Medium-term note master form"),
     (r"AMENDMENT\s+TO\s+INVESTMENT\s+AGREEMENT", "investment_agreement", "Investment agreement amendment"),
     (r"REGISTRATION\s+RIGHTS\s+AGREEMENT", "rights_agreement", "Registration rights agreement"),
+    (r"APPENDIX\s+2A", "asx_disclosure", "ASX securities quotation notice — share count, not bond"),
     (r"APPENDIX\s+3[YZ]", "asx_disclosure", "ASX director interest/substantial holder notice"),
+    (r"ORDINARY\s+FULLY\s+PAID", "asx_equity", "ASX ordinary equity shares — not a bond"),
+    (r"SECURITIES\s+TO\s+BE\s+QUOTED", "asx_equity", "ASX quotation notice — equity, not bond"),
+    (r"CASH\s+AND\s+INVESTMENTS\s+HELD\s+IN\s+TRUST\s+ACCOUNT", "spac_trust", "SPAC trust account notice — not a bond indenture"),
+    (r"BLANK\s+CHECK\s+COMPANY", "spac_trust", "SPAC blank check company — not a bond"),
     (r"CHANGE\s+OF\s+DIRECTOR", "asx_disclosure", "ASX change of director notice"),
     (r"THIS\s+(?:NOTE|CERTIFICATE|SECURITY)\s+IS\s+A\s+GLOBAL\s+SECURITY", "global_security_form", "Global security certificate form"),
 ]
