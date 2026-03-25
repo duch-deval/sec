@@ -44,7 +44,7 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
     LLM fallback for issue size. Returns None on failure or raw_match mismatch.
     Only called when regex returns empty.
     """
-    time.sleep(2)
+    time.sleep(3)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     if not _llm_enabled():
         return None
@@ -69,13 +69,23 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
         return None
 
 
+def _clean_maturity_snippet(snippet: str) -> str:
+    """Remove indenture execution date lines that confuse LLM into returning wrong date."""
+    import re
+    # Remove "Dated as of Month DD, YYYY" lines — these are execution dates, not maturity dates
+    snippet = re.sub(r'[Dd]ated\s+as\s+of\s+\w+\s+\d{1,2},?\s+20\d{2}', '', snippet)
+    # Remove "dated Month DD, YYYY" variants
+    snippet = re.sub(r'dated[^.]{0,40}20\d{2}', '', snippet, flags=re.IGNORECASE)
+    return snippet.strip()
+
+
 def extract_maturity_date(snippet: str, model: str = DEFAULT_MODEL) -> Optional[MaturityDateExtraction]:
     """
     LLM fallback for maturity date. Returns None on failure or raw_match mismatch.
     Only called when regex returns a year-only value or empty.
     """
-    time.sleep(2)
-    snippet = snippet[:MAX_SNIPPET_CHARS]
+    time.sleep(3)
+    snippet = _clean_maturity_snippet(snippet[:MAX_SNIPPET_CHARS])
     if not _llm_enabled():
         return None
     try:
@@ -113,7 +123,7 @@ def extract_bd_by_reference(snippet: str, model: str = DEFAULT_MODEL) -> Optiona
     LLM fallback for BD-by-reference. Returns None on failure or raw_match mismatch.
     Only called when BD definition defers to 'Legal Holiday' or 'Place of Payment'.
     """
-    time.sleep(2)
+    time.sleep(3)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     if not _llm_enabled():
         return None
