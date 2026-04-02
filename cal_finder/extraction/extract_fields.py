@@ -13,7 +13,7 @@ load_dotenv(Path(__file__).parents[2] / '.env')
 from bs4 import BeautifulSoup
 import openpyxl
 
-from .llm_fallback import extract_issue_size, extract_maturity_date, extract_bd_by_reference
+from .llm_fallback import extract_issue_size, extract_bd_by_reference
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,12 @@ class ExtractionConfig:
 
 _MONTH = r'(?:January|February|March|April|May|June|July|August|September|October|November|December)'
 _OPT_FULL_DATE = rf'(?:{_MONTH}\s+\d{{1,2}},?\s+)?'
+_MONTH_PAT = re.compile(
+    r'January|February|March|April|May|June|July|August'
+    r'|September|October|November|December',
+    re.IGNORECASE,
+)
+_BD_REF_PAT = re.compile(r'place\s+of\s+payment|legal\s+holiday', re.IGNORECASE)
 
 SECURITY_PATTERNS = [
     (rf"(\d+(?:\.\d+)?%\s+Series\s+[Dd]ue\s+{_OPT_FULL_DATE}20\d{{2}})", "year"),
@@ -134,6 +140,8 @@ LOCATION_PATTERNS = [
     (r'\btoronto\b', 'Toronto'),
     (r'minneapolis,?\s*minnesota', 'Minneapolis'),
     (r'\bminneapolis\b', 'Minneapolis'),
+    (r'hartford,?\s*connecticut', 'Hartford'),
+    (r'\bhartford\b', 'Hartford'),
     (r'\btokyo\b', 'Tokyo'),
     (r'\blondon\b', 'London'),
     (r'\bsydney\b(?:,?\s*australia)?', 'Sydney'),
@@ -532,7 +540,11 @@ class FieldExtractor:
                     continue
                 if p.lower() in US_STATES or p.lower() in {'united kingdom', 'united states', 'united arab emirates'}:
                     continue
-                if p.lower() in {'the', 'a', 'an', 'any', 'each', 'saturday', 'sunday', 'monday'}:
+                if p.lower() in {'the', 'a', 'an', 'any', 'each', 'saturday', 'sunday', 'monday',
+                                  'generally', 'generally,', 'otherwise', 'except', 'including',
+                                  'provided', 'where', 'which', 'that', 'such', 'other'}:
+                    continue
+                if len(p) > 40:
                     continue
                 p_norm = re.sub(r'^the\s+(?:city|borough)\s+of\s+', '', p.lower()).strip()
                 if p_norm in found_lower or p.lower().replace(' city', '') in found_lower:
@@ -755,43 +767,40 @@ class FieldExtractor:
     def extract_maturity_date_from_text(self, text: str, security_desc: str = None) -> Optional[str]:
         if not text:
             return None
+        target_year = None
+        if security_desc:
+            yr_m = re.search(r'\b(20\d{2})\b', security_desc)
+            if yr_m:
+                target_year = yr_m.group(1)
         patterns = [
             rf'(?:Stated\s+)?Maturity\s+Date["\s:]*(?:is\s+|shall\s+be\s+|means?\s+)?({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
             rf'matur(?:ing|e|es)\s+(?:on\s+)?({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
             rf'\bdue\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})',
             rf'(?:Maturity\s+Date|mature[sd]?)\b[^.\n]{{0,200}}?\bon\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})\s*\(',
             rf'principal\b[^.\n]{{0,80}}\bpayable\s+on\s+({_MONTH}(?:\s|&nbsp;)+\d{{1,2}},?(?:\s|&nbsp;)+20\d{{2}})\b',
+            rf'(?:redemption|repay(?:ment)?|(?<!interest\s)payment\s+of\s+principal)\b[^.\n]{{0,60}}(?:at|on)\s+({_MONTH}\s+\d{{1,2}},?\s+20\d{{2}})',
+            rf'principal\b[^.\n]{{0,120}}\bon\s+({_MONTH}\s+\d{{1,2}},?\s+20\d{{2}})',
         ]
         for pattern in patterns:
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                return re.sub(r'&nbsp;', ' ', m.group(1)).strip()
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                result = re.sub(r'&nbsp;', ' ', m.group(1)).strip()
+                if target_year is None or target_year in result:
+                    return result
         return None
 
     def extract_issue_size(self, text: str) -> Optional[str]:
         if not text:
             return None
-        # Tier 1: Known currency symbols/codes (high confidence, exact match)
         _CUR_KNOWN = r'(?:U\.S\.\$|US\$|Cdn\$|\$|€|¥|£|C\$|A\$|HK\$|NZ\$|S\$|Mex\$|R\$|CAD|AUD|BRL|MXN|CHF|CNY|HKD|NZD|SGD|SEK|NOK|DKK|PLN|ZAR|₹|₩|kr|Rs\.?)'
-        # Tier 2: Generic fallback — any currency-like prefix:
-        #   [A-Z]{0,3}\$  → catches "NT$", "Cdn$", or bare "$"
-        #   unicode currency symbols (₫₿฿₪₱₨₵₡₣₲₴₺₼₽₾)
-        #   3-letter uppercase code before digits — BUT only if it doesn't look like
-        #   a common English word (THE, DUE, PER, FOR, ARE, NOT, etc.)
         _COMMON_3 = r'(?!THE|DUE|PER|FOR|ARE|NOT|AND|BUT|ALL|ANY|HAS|HAD|ITS|MAY|OUR|OWN|SET|SUM|TAX|USE|WAS|YET)'
         _CUR_GENERIC = rf'(?:[A-Z]{{0,3}}\$|[€¥£₹₩₫₿฿₪₱₨₵₡₣₲₴₺₼₽₾]|{_COMMON_3}[A-Z]{{3}}(?=\s*[\d,]))'
-        # Combined: try known first, fall back to generic
         _CUR = rf'(?:{_CUR_KNOWN}|{_CUR_GENERIC})'
         patterns = [
             rf'aggregate\s+(?:initial\s+)?principal\s+amount\s+of\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
             rf'{_CUR}\s*([\d,]+(?:\.\d+)?)\s+(?:aggregate\s+)?principal\s+amount',
             rf'principal\s+amount\s+(?:of\s+)?{_CUR}\s*([\d,]+(?:\.\d+)?)',
             rf'in\s+(?:an?\s+)?aggregate\s+(?:principal\s+)?amount\s+(?:of\s+|to\s+)?{_CUR}\s*([\d,]+(?:\.\d+)?)',
-            # Bridging: "aggregate principal amount of [words] shall be {CUR}{amount}"
-            # Uses [\s\S] instead of . to match across newlines in parsed HTML text
             rf'aggregate\s+(?:initial\s+)?principal\s+amount\s+of\s+[\s\S]{{1,120}}(?:shall\s+be|is|equals?|of)\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
-            # Parenthesized: "aggregate principal amount of WRITTEN AMOUNT ({CUR}{amount})"
-            # Catches written-out amounts like "FIVE HUNDRED MILLION EURO (€500,000,000)"
             rf'aggregate\s+(?:initial\s+)?principal\s+amount\s+[\s\S]{{1,80}}\({_CUR}\s*([\d,]+(?:\.\d+)?)\)',
             rf'(?:limited\s+(?:\w+\s+){{0,2}}to|up\s+to)\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
             rf'(?:not\s+to\s+exceed|not\s+exceeding)\s+{_CUR}\s*([\d,]+(?:\.\d+)?)',
@@ -803,7 +812,6 @@ class FieldExtractor:
             r'quotations?\s+.{0,30}for|bid\s+.{0,20}for)',
             re.IGNORECASE
         )
-        # Broader negative context for covenant baskets (checked with wider window)
         _NEG_COVENANT = re.compile(
             r'Indebtedness',
             re.IGNORECASE
@@ -820,7 +828,6 @@ class FieldExtractor:
                     preceding = search_text[max(0, m.start() - 60):m.start()]
                     if _NEG_CONTEXT.search(preceding):
                         continue
-                    # Wider window for covenant basket detection
                     preceding_wide = search_text[max(0, m.start() - 120):m.start()]
                     if _NEG_COVENANT.search(preceding_wide):
                         continue
@@ -836,13 +843,10 @@ class FieldExtractor:
                         continue
             return amounts
 
-        # Prefer cover page (first 2000 chars) — take max (title page states total)
         cover_amounts = _find_amounts(text[:2000])
         if cover_amounts:
             return f"{int(max(cover_amounts)):,}"
 
-        # Cover-page fallback: bare large amount near CUSIP/ISIN (note form title pages)
-        # Matches "€2,250,000,000  CUSIP:" or "$500,000,000  ISIN:" on cover
         cover = text[:2000]
         if re.search(r'(?:CUSIP|ISIN)', cover, re.IGNORECASE):
             for m in re.finditer(rf'{_CUR}\s*([\d,]+(?:\.\d+)?)', cover, re.IGNORECASE):
@@ -856,13 +860,10 @@ class FieldExtractor:
                 preceding = cover[max(0, m.start() - 60):m.start()]
                 if _NEG_CONTEXT.search(preceding):
                     continue
-                # Must be near a CUSIP/ISIN reference (within 200 chars)
                 nearby = cover[m.start():m.end() + 200]
                 if re.search(r'(?:CUSIP|ISIN)', nearby, re.IGNORECASE):
                     return f"{int(val):,}"
 
-        # Fallback to full text — take first qualifying match (not max, to avoid
-        # grabbing combined aggregates in multi-security docs like AMGEN)
         for pat in patterns:
             for m in re.finditer(pat, text, re.IGNORECASE):
                 preceding = text[max(0, m.start() - 60):m.start()]
@@ -889,7 +890,6 @@ class FieldExtractor:
 
         normalized = re.sub(r'\s+', ' ', text[:8000])
 
-        # Detect document type: supplemental indenture OR note form / global note
         is_supplemental = bool(re.search(r'supplemental\s+indenture', normalized, re.IGNORECASE))
         is_note_form = bool(re.search(
             r'(?:THIS\s+(?:NOTE|CERTIFICATE|SECURITY)\s+IS\s+A\s+GLOBAL\s+(?:NOTE|SECURITY))|'
@@ -910,7 +910,6 @@ class FieldExtractor:
         if m:
             return f"Refers to Base Indenture dated {m.group(1)}"
 
-        # Match "under/pursuant to the/an Indenture, dated as of [date]"
         m = re.search(
             r'(?:under|pursuant\s+to)\s+(?:the|an)\s+indenture["\s)]*,?\s*dated\s+(?:as\s+of\s+)?'
             r'([A-Z][a-z]+\s+\d{1,2},?\s+\d{4})',
@@ -992,7 +991,6 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
         else:
             legacy_spans = extractor._find_legacy_table_spans(body_text)
             sec_joined = extractor.extract_securities(body_text, exclude_spans=legacy_spans)
-            # If operative section had no securities, fall back to full text
             if not sec_joined and whereas_end:
                 legacy_spans = extractor._find_legacy_table_spans(text)
                 sec_joined = extractor.extract_securities(text, exclude_spans=legacy_spans)
@@ -1008,21 +1006,26 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             row["Text"] = bd_text
             row["Business Days - Standardized"] = "; ".join(locations) if locations else ""
             row["Mapping"] = "; ".join(codes) if codes else ""
-            stats['bdays'] += 1
-        elif not row.get("Base Indenture Reference"):
-            llm_result = extract_bd_by_reference(bd_text) if bd_text else None
-            if llm_result:
-                locations = llm_result.locations
-                codes = extractor.map_locations_to_codes(locations)
-                row["Text"] = llm_result.raw_match
-                row["Business Days - Standardized"] = "; ".join(locations)
-                row["Mapping"] = "; ".join(codes) if codes else ""
-                row["_llm_used"] = True
-                row["_llm_field"] = "bd_reference"
-                row["_llm_raw_match"] = llm_result.raw_match
+            if not locations and not row.get("Base Indenture Reference"):
+                if _BD_REF_PAT.search(bd_text):
+                    _bd_pos = text.lower().find('place of payment')
+                    if _bd_pos == -1:
+                        _bd_pos = text.lower().find('legal holiday')
+                    _bd_snip = text[max(0, _bd_pos - 200): _bd_pos + 800] if _bd_pos > -1 else bd_text
+                    llm_result = extract_bd_by_reference(_bd_snip)
+                    if llm_result:
+                        llm_locations = llm_result.locations
+                        llm_codes = extractor.map_locations_to_codes(llm_locations)
+                        row["Business Days - Standardized"] = "; ".join(llm_locations)
+                        row["Mapping"] = "; ".join(llm_codes) if llm_codes else ""
+                        row["_llm_used"] = True
+                        row["_llm_field"] = "bd_reference"
+                        row["_llm_raw_match"] = llm_result.raw_match
+                        stats['bdays'] += 1
+            else:
                 stats['bdays'] += 1
 
-        if not issue_size:
+        if not issue_size and not row.get("Base Indenture Reference"):
             llm_result = extract_issue_size(text)
             if llm_result:
                 issue_size = f"{int(llm_result.amount):,}"
@@ -1090,28 +1093,18 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
                 sec_row["CUSIP"] = cusip_list[idx] if idx < len(cusip_list) else ""
                 sec_row["ISIN"] = isin_list[idx] if idx < len(isin_list) else ""
                 sec_row["Coupon Rate"] = extractor.parse_coupon_rate(sec_list[idx]) or ""
-                sec_row["Maturity Date"] = extractor.parse_maturity_date(sec_list[idx]) or ""
+                _sec_maturity = extractor.parse_maturity_date(sec_list[idx]) or ""
+                if _sec_maturity and _sec_maturity.isdigit():
+                    _full = extractor.extract_maturity_date_from_text(text, sec_list[idx])
+                    if _full:
+                        _sec_maturity = _full
+                sec_row["Maturity Date"] = _sec_maturity
                 extra_rows.append(sec_row)
 
         if not row.get("Maturity Date") or row.get("Maturity Date", "").strip().isdigit():
             if full_maturity := extractor.extract_maturity_date_from_text(text, row.get("Security Description")):
                 row["Maturity Date"] = full_maturity
                 stats['maturity'] += 1
-            elif row.get("Maturity Date", "").strip().isdigit():
-                _yr = row["Maturity Date"].strip()
-                # Skip title area (first 200 chars), find first body hit directly
-                _body_pos = text.find(_yr, 200)
-                if _body_pos == -1:
-                    llm_result = None  # year only in title/desc, no body hit
-                else:
-                    _snip = text[max(0, _body_pos - 400): _body_pos + 400]
-                    llm_result = extract_maturity_date(_snip)
-                if llm_result:
-                    row["Maturity Date"] = llm_result.date_str
-                    row["_llm_used"] = True
-                    row["_llm_field"] = "maturity_date"
-                    row["_llm_raw_match"] = llm_result.raw_match
-                    stats['maturity'] += 1
 
         if gov_laws and len(gov_laws) > 1:
             for gl in gov_laws[1:]:
@@ -1124,9 +1117,6 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
 
     rows.extend(extra_rows)
 
-    # Post-processing: null out issue_size for master indentures
-    # Rule: if a single file generates >10 rows with identical issue_size,
-    # the amount is a shared trust balance, not an individual series issue size
     from collections import Counter
     file_issue_counts = Counter(
         (r.get("File Link", ""), r.get("Issue Size", ""))
