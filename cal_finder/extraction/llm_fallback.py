@@ -106,11 +106,12 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
         if not data:
             return None
         try:
-            amount_str = str(data.get("amount", "")).replace(",", "").replace("$", "").strip()
+            raw_amount = str(data.get("amount", "")).strip()
             # Guard: reject coupon rates mistaken for issue size
-            if "%" in amount_str:
-                logger.warning("NuExtract issue size parse failed: looks like coupon rate: %r", amount_str)
+            if "%" in raw_amount:
+                logger.warning("NuExtract issue size parse failed: looks like coupon rate: %r", raw_amount)
                 return None
+            amount_str = raw_amount.replace(",", "").replace("$", "").strip()
             if not amount_str or not re.search(r"\d", amount_str):
                 return None
             amount = int(float(amount_str))
@@ -118,14 +119,14 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
             if amount < 100_000:
                 logger.warning("NuExtract issue size parse failed: amount %d too small", amount)
                 return None
-            # NuExtract raw_match is unreliable — verify amount appears in snippet instead
-            if not re.search(re.escape(amount_str.split(".")[0][-6:]), snippet):
-                logger.warning("NuExtract issue size: amount %r not found in snippet — discarding", amount_str)
+            # Verify the raw amount string appears in the snippet
+            if not re.search(re.escape(raw_amount.lstrip("$").split(".")[0][-6:]), snippet):
+                logger.warning("NuExtract issue size: amount %r not found in snippet — discarding", raw_amount)
                 return None
             result = IssueSizeExtraction(
                 amount=amount,
                 currency=data.get("currency", "USD") or "USD",
-                raw_match=amount_str,  # use amount_str as synthetic raw_match
+                raw_match=raw_amount,  # pass pre-strip value so Pydantic sees digits/commas
             )
             return result
         except Exception as e:
