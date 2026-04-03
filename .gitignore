@@ -22,3 +22,5 @@ __pycache__/
 *.key
 .DS_Store
 cal_finder/extraction-ethan/
+cal_finder/extract_corpus_text.py
+cal_finder/test_maturity_fix.py
