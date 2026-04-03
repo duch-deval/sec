@@ -20,5 +20,4 @@ __pycache__/
 # Secrets
 .env
 *.key
-cal_finder/extraction/resources/Mapping.xlsx
 .DS_Store

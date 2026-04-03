@@ -63,9 +63,9 @@ def _nuextract_call(model: str, schema: dict, text: str) -> Optional[dict]:
             api_base="http://localhost:11434",
         )
         raw = resp.choices[0].message.content or ""
-        # Strip NuExtract wrapper tokens — leaves a full pretty-printed JSON block
+        # Parse model output
         raw = raw.split("<|output|>")[-1].split("<|end-output|>")[0].strip()
-        # Extract first complete JSON object only — ignore any trailing model commentary
+        # Extract first complete JSON object
         brace = raw.find("{")
         if brace != -1:
             depth, end = 0, -1
@@ -74,12 +74,12 @@ def _nuextract_call(model: str, schema: dict, text: str) -> Optional[dict]:
                 elif ch == "}": depth -= 1
                 if depth == 0: end = i + 1; break
             raw = raw[brace:end] if end != -1 else raw
-        # Guard: if output contains ### it's a context bleed — model returned its own schema
+        # Reject malformed output
         if "### " in raw:
             logger.warning("NuExtract context bleed detected — discarding")
             return None
         data = json.loads(raw)
-        # Guard: reject if keys don't match expected schema keys
+        # Validate schema keys
         if not any(k in data for k in schema):
             logger.warning("NuExtract returned wrong schema — discarding")
             return None
@@ -107,7 +107,7 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
             return None
         try:
             raw_amount = str(data.get("amount", "")).strip()
-            # Guard: reject coupon rates mistaken for issue size
+            # Reject non-issue-size values
             if "%" in raw_amount:
                 logger.warning("NuExtract issue size parse failed: looks like coupon rate: %r", raw_amount)
                 return None
@@ -115,24 +115,24 @@ def extract_issue_size(snippet: str, model: str = DEFAULT_MODEL) -> Optional[Iss
             if not amount_str or not re.search(r"\d", amount_str):
                 return None
             amount = int(float(amount_str))
-            # Guard: minimum plausible issue size
+            # Minimum size threshold
             if amount < 100_000:
                 logger.warning("NuExtract issue size parse failed: amount %d too small", amount)
                 return None
-            # Verify the raw amount string appears in the snippet
+            # Verify amount present in source
             if not re.search(re.escape(raw_amount.lstrip("$").split(".")[0][-6:]), snippet):
                 logger.warning("NuExtract issue size: amount %r not found in snippet — discarding", raw_amount)
                 return None
             result = IssueSizeExtraction(
                 amount=amount,
                 currency=data.get("currency", "USD") or "USD",
-                raw_match=raw_amount,  # pass pre-strip value so Pydantic sees digits/commas
+                raw_match=raw_amount,
             )
             return result
         except Exception as e:
             logger.warning("NuExtract issue size parse failed: %s", e)
             return None
-    # Haiku path
+    # API model path
     time.sleep(3)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     try:
@@ -220,7 +220,7 @@ def extract_bd_by_reference(snippet: str, model: str = DEFAULT_MODEL) -> Optiona
         except Exception as e:
             logger.warning("NuExtract BD reference parse failed: %s", e)
             return None
-    # Haiku path
+    # API model path
     time.sleep(3)
     snippet = snippet[:MAX_SNIPPET_CHARS]
     try:
