@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parents[2] / '.env')
 
+from collections import Counter
+
 from bs4 import BeautifulSoup
 import openpyxl
 
@@ -52,6 +54,7 @@ def _is_valid_cusip(cusip9: str) -> bool:
     except ValueError:
         return False
 
+
 @dataclass(frozen=True)
 class ExtractionConfig:
     location_mapping: Dict[str, str]
@@ -93,6 +96,7 @@ _MONTH_PAT = re.compile(
     re.IGNORECASE,
 )
 _BD_REF_PAT = re.compile(r'place\s+of\s+payment|legal\s+holiday', re.IGNORECASE)
+
 
 SECURITY_PATTERNS = [
     (rf"(\d+(?:\.\d+)?%\s+Series\s+[Dd]ue\s+{_OPT_FULL_DATE}20\d{{2}})", "year"),
@@ -226,6 +230,8 @@ GOVERNING_LAW_TYPE_KEYWORDS = {
     'Disposition': [r'\bdisposition[s]?\b', r'\btransfer[s]?\s+(?:of|and)\b', r'\bassignment[s]?\b'],
 }
 
+# Note: "Company " and "File Link " retain trailing spaces to match
+# the Bloomberg-provided CSV header format exactly.
 EXPORT_COLUMNS = [
     "Company ", "File Date", "File Type", "File Link ", "Exhibit",
     "Security Description", "CUSIP", "ISIN",
@@ -1018,9 +1024,6 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
                         llm_codes = extractor.map_locations_to_codes(llm_locations)
                         row["Business Days - Standardized"] = "; ".join(llm_locations)
                         row["Mapping"] = "; ".join(llm_codes) if llm_codes else ""
-                        row["_llm_used"] = True
-                        row["_llm_field"] = "bd_reference"
-                        row["_llm_raw_match"] = llm_result.raw_match
                         stats['bdays'] += 1
             else:
                 stats['bdays'] += 1
@@ -1030,9 +1033,6 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             if llm_result:
                 issue_size = f"{int(llm_result.amount):,}"
                 row["Issue Size"] = issue_size
-                row["_llm_used"] = True
-                row["_llm_field"] = "issue_size"
-                row["_llm_raw_match"] = llm_result.raw_match
                 stats['issue_size'] += 1
         else:
             row["Issue Size"] = issue_size
@@ -1117,7 +1117,6 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
 
     rows.extend(extra_rows)
 
-    from collections import Counter
     file_issue_counts = Counter(
         (r.get("File Link", ""), r.get("Issue Size", ""))
         for r in rows
@@ -1132,62 +1131,14 @@ def run_pipeline(root_dir: Path, mapping_xlsx: Path = None, verbose: bool = Fals
             key = (r.get("File Link", ""), r.get("Issue Size", ""))
             if key in master_indenture_keys:
                 r["Issue Size"] = ""
-                r["_llm_used"] = False
-                r["_llm_field"] = ""
-                r["_llm_raw_match"] = ""
 
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
-    _write_to_supabase(rows)
 
     logger.info("Extraction: %d docs | Sec: %d | CUSIP: %d | ISIN: %d | BDays: %d | GovLaw: %d | Coupon: %d | Maturity: %d | IssueSize: %d",
                 stats['processed'], stats['security'], stats['cusip'], stats['isin'], stats['bdays'],
                 stats['gov_law'], stats['coupon'], stats['maturity'], stats['issue_size'])
     return True
-
-def _write_to_supabase(rows: list) -> None:
-    """Write extraction rows to bloomberg.extractions. Fails silently — CSV is the primary output."""
-    import os
-    from supabase import create_client
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        logger.warning("SUPABASE_URL or SUPABASE_KEY not set — skipping Supabase write")
-        return
-    try:
-        client = create_client(url, key)
-        records = []
-        for row in rows:
-            records.append({
-                "file_name":          row.get("File Link ", ""),
-                "issuer":             row.get("Company ", ""),
-                "file_date":          row.get("File Date") or None,
-                "file_type":          row.get("File Type", ""),
-                "exhibit":            row.get("Exhibit", ""),
-                "file_link":          row.get("File Link ", ""),
-                "security_desc":      row.get("Security Description", ""),
-                "cusip":              row.get("CUSIP", ""),
-                "isin":               row.get("ISIN", ""),
-                "coupon_rate":        row.get("Coupon Rate", ""),
-                "issue_size":         row.get("Issue Size", ""),
-                "maturity_date":      row.get("Maturity Date", ""),
-                "bd_text":            row.get("Text", ""),
-                "bd_locations":       row.get("Business Days - Standardized", ""),
-                "bd_codes":           row.get("Mapping", ""),
-                "gov_law_text":       row.get("Governing Law Text", ""),
-                "gov_law_type":       row.get("Governing Law Type", ""),
-                "gov_law":            row.get("Governing Law", ""),
-                "gov_law_code":       row.get("Governing Law Code", ""),
-                "base_indenture_ref": row.get("Base Indenture Reference", ""),
-                "review_required":    bool(row.get("_llm_used")),
-                "llm_used":           bool(row.get("_llm_used")),
-                "llm_field":          row.get("_llm_field") or None,
-                "llm_raw_match":      row.get("_llm_raw_match") or None,
-            })
-        client.schema("bloomberg").table("extractions").insert(records).execute()
-        logger.info("Supabase write: %d rows inserted", len(records))
-    except Exception as e:
-        logger.warning("Supabase write failed (non-fatal): %s", e)

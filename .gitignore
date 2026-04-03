@@ -21,3 +21,4 @@ __pycache__/
 .env
 *.key
 .DS_Store
+cal_finder/extraction-ethan/
