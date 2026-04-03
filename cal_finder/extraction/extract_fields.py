@@ -15,7 +15,7 @@ from collections import Counter
 from bs4 import BeautifulSoup
 import openpyxl
 
-from .llm_fallback import extract_issue_size, extract_bd_by_reference
+from .fallback_extractor import extract_issue_size, extract_bd_by_reference
 
 logger = logging.getLogger(__name__)
 

@@ -67,7 +67,7 @@ if __name__ == "__main__":
         output_dir = Path(input_path.stem)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        from .csv_xlsx_download import run as download_samples
+        from .output_writer import run as download_samples
         download_samples(input_path, output_dir)
 
         success = run_pipeline(output_dir, mapping, verbose=True)
